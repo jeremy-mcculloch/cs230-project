@@ -13,6 +13,7 @@ from src.CANN.util_functions import traindata, Compile_and_fit
 from src.utils import *
 from src.CANN.models import ortho_cann_3ff
 
+global_scale_factor = 1e6
 
 class Encoder(Layer):
     def __init__(self, latent_dim):
@@ -67,12 +68,13 @@ class CANN_VAE(Model):
         self.dec = Decoder(n_params, self.stddev_output)
         self.flatten = Flatten()
         self.cann_model = ortho_cann_3ff_model(self.lam_ut_all)
+        self.stdev_scaling = 10.0
 
 
     def decode(self, latent):
         dec_out = self.dec(latent)
         params = dec_out[:, 0:self.n_params]
-        stdev = dec_out[:, -1] if self.stddev_output else self.stddev
+        stdev = self.stdev_scaling * dec_out[:, -1] if self.stddev_output else self.stddev
         stresses = self.cann_model(tf.split(params, self.n_params, axis=1))
         stresses = tf.reduce_sum(stresses, axis=2)
         return stresses, params, stdev
@@ -86,7 +88,7 @@ class CANN_VAE(Model):
         latent = enc_out[:, 0:self.latent_dim] + normal_rand * tf.exp(enc_out[:, self.latent_dim:]) # Reparameterization trick
         dec_out = self.dec(latent)
         params = dec_out[:, 0:self.n_params]
-        stdev = dec_out[:, -1] if self.stddev_output else self.stddev
+        stdev = self.stdev_scaling * dec_out[:, -1] if self.stddev_output else self.stddev
         stresses = self.cann_model(tf.split(params, self.n_params, axis=1))
 
         stresses = tf.reduce_sum(stresses, axis=2)
@@ -261,13 +263,16 @@ def kl_loss(enc_out):
 
 
 def train_vae(stretches, stresses, epochs=5000, should_save=True):
-    inputs = stresses[:, :, :] / 1e5
+    inputs = stresses[:, :, :] / global_scale_factor
     stdev = np.std(inputs)
     model = CANN_VAE(34, 64, stretches)
-    optimizer = keras.optimizers.Adam(lr=0.001)
+    optimizer = keras.optimizers.Adam(lr=0.0001)
 
     model.compile(optimizer=optimizer)
     test, params, stdev = model(inputs)
+    print(test)
+    print(stdev)
+    print(params)
     model.summary()
 
     model.train(inputs, inputs, epochs=epochs, batch_size=128, validation_split=0)
@@ -278,18 +283,18 @@ def train_vae(stretches, stresses, epochs=5000, should_save=True):
 
 def load_vae(stretches, stresses):
     model = CANN_VAE(34, 64, stretches)
-    inputs = stresses[:, :, :] / 1e5
+    inputs = stresses[:, :, :] / global_scale_factor
     test, params, stdev = model(inputs)
     model.load_weights('./Results/vae_weights')
     return model
 
 def test_vae(model, stretches, stresses):
-    inputs = stresses[:, :, :] / 1e5
+    inputs = stresses[:, :, :] / global_scale_factor
 
     output, params, stdev = model(inputs)
     # np_config.enable_numpy_behavior()
 
-    stress_out = output[:, :, :].numpy().reshape((10, 10, 100, 2)) * 1e5
+    stress_out = output[:, :, :].numpy().reshape((10, 10, 100, 2)) * global_scale_factor
     stress_in = stresses[:, :, :].reshape((10, 10, 100, 2))
     stretch_plot = stretches[0, :, :].reshape((5, 100, 2))
     stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
@@ -313,7 +318,7 @@ def test_vae(model, stretches, stresses):
 
 
 def nuts_sample(model, stretches, stress_map, stresses):
-    stresses_in = stresses / 1e5
+    stresses_in = stresses / global_scale_factor
     def log_p(latent):
         stresses_out, params_out, stdev_out = model.decode(latent)
         prior = -0.5 * tf.norm(latent) ** 2
@@ -355,7 +360,7 @@ def nuts_sample(model, stretches, stress_map, stresses):
     stretch_plot = stretches[0, :, :].reshape((5, 100, 2))
     stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
 
-    stress_out_plot = stress_out_avg.numpy() .reshape((10, 100, 2)) * 1e5
+    stress_out_plot = stress_out_avg.numpy() .reshape((10, 100, 2)) * global_scale_factor
     stress_in_plot = stresses.reshape((10, 100, 2))
 
     fig, axes = plt.subplots(4, 5)
@@ -509,7 +514,7 @@ def validate_cann(stretches, stresses, params):
     stretch_plot = stretches.reshape((5, -1, 2))
     stress_in_plot = stresses.reshape((10, -1, 2))
 
-    stress_out_plot = np.array(Stress_predict_UT).squeeze().transpose((0, 2, 1)).reshape((10, -1, 2)) * 1e5  # 2 x 500 x 2
+    stress_out_plot = np.array(Stress_predict_UT).squeeze().transpose((0, 2, 1)).reshape((10, -1, 2)) * global_scale_factor  # 2 x 500 x 2
     fig, axes = plt.subplots(4, 5)
     stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
     for i in range(4):
@@ -526,7 +531,7 @@ def validate_cann(stretches, stresses, params):
 def test_cann(stretches, params):
     # Generate stretch / stress
     cann_model = ortho_cann_3ff_model(stretches)
-    stresses = np.float64(tf.reduce_sum(cann_model(tf.split(params, params.shape[0], axis=0)), axis=2)) * 1e5
+    stresses = np.float64(tf.reduce_sum(cann_model(tf.split(params, params.shape[0], axis=0)), axis=2)) * global_scale_factor
     validate_cann(stretches[0, :, :], stresses, params)
 
 

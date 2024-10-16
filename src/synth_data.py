@@ -38,11 +38,12 @@ def generate_data(num_samples):
     invs = get_invs(stretches) # 1000 x 5
     output_grads = get_output_grads(stretches)  # 1000 x 5 x 2
 
-    stresses = get_stresses(thetas, params, invs, output_grads)
+    stresses = get_stresses(thetas, params, invs, output_grads).reshape((-1, 10, 100, 2))
     snr = 10.0
-    signal_variance = np.std(stresses, axis=(1, 2))
+    # signal_variance = np.std(stresses, axis=2)
     noise = np.random.standard_normal(stresses.shape)
-    stresses += noise * signal_variance[:, np.newaxis, np.newaxis] / snr
+    stresses += noise * stresses / snr
+    stresses = stresses.reshape((-1, 1000, 2))
     return params, stretches, stresses
 
 
@@ -85,8 +86,8 @@ def get_stresses(thetas, params, invs, output_grads):
 
     # output_grads 1000 x 5 x 2
     # thetas ns x 3
-    exp_scale = 0.1
-    exp_scale2 = 0.1
+    exp_scale = 1
+    exp_scale2 = 1
     dpsi_dtheta = params[:, :, 0] * (np.exp(params[:, :, 1] * I4thetas * exp_scale) - 1) + params[:, :, 2] * I4thetas \
                   + params[:, :, 3] * I4thetas * np.exp(params[:, :, 4] * I4thetas ** 2 * exp_scale2)
     dpsi_dnegtheta = params[:, :, 0] * (np.exp(params[:, :, 1] * I4negthetas * exp_scale) - 1) + params[:, :, 2] * I4negthetas \

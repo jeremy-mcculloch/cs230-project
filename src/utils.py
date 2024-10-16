@@ -1,4 +1,15 @@
 import numpy as np
+import pandas as pd
+
+def load_data():
+    file_names = ["../inputs/sample_stresses_90.xlsx"] * 5 +  ["../inputs/sample_stresses_45.xlsx"] * 5
+    sheetnames = [f"Sheet{i+1}" for i in range(5)] * 2
+    loading_data_all = np.array([pd.read_excel(file_names[i], sheet_name=sheetnames[i], engine='openpyxl').to_numpy() for i in
+                       range(len(file_names))]).reshape(2, -1, 4)  ## 100 rows x 10 columns
+    stretches = loading_data_all[:, :, 0:2]
+    stresses = loading_data_all[:, :, 2:]
+    return stretches, stresses
+
 def get_invs(stretches): # 2 x 500 x 2
     ## 0-90
     w_stretch_090 = stretches[0, :, 0]
