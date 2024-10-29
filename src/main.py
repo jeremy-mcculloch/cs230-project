@@ -14,14 +14,17 @@ if __name__ == "__main__":
     # #     print(i)
     # # params = np.random.rand(34)
     # # test_cann(stretches_train, params)
-    # tf.keras.backend.set_floatx('float64')
-    train_bcanns(stretches[0, :, :], stresses)
+    # tf.keras.backend.set_floa
+    # tx('float64')
+    train_bcanns(stretches[0, :, :], stresses, should_train=False, kevins_version=False) # Test if works the same as before
+
+
     # validate_cann(stretches_test[0, :, :], stresses_test[0, :, :], params[0, :])
     #
     # tf.keras.backend.set_floatx('float64')
     #
     #
-    # # model = train_vae(stretches_train, stresses_train)
+    # model = train_vae(stretches_train, stresses_train)
     # model = load_vae(stretches_train, stresses_train)
     # # #
     # # test_vae(model, stretches_test, stresses_test)

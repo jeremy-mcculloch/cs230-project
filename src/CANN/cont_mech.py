@@ -130,6 +130,22 @@ def Stress_cal_w(inputs):
                               dWI4_w * stretch_w)
     return stress_w
 
+def Stress_cal_w_sq(inputs):
+    """
+    Compute stress in warp direction given stretch and strain energy partial derivatives (in 0-90 orientation)
+    :param inputs: tuple containing strain energy derivatives with respect to I1, I2, and I4w, and stretch in w and s
+    :return: Stress in warp direction
+    """
+    (dWI1, dWI2, dWI4_w, stretch_w, stretch_s) = inputs
+    one = tf.constant(1.0, dtype='float32')
+    two = tf.constant(2.0, dtype='float32')
+
+    stretch_z = one / (stretch_w * stretch_s)
+    stress_w = 4.0 * (dWI1 * (stretch_w - stretch_z * stretch_z / stretch_w) ** 2 +
+                      dWI2 * (stretch_w * stretch_s * stretch_s - 1 / (stretch_w * stretch_w * stretch_w)) ** 2 +
+                      dWI4_w * stretch_w ** 2)
+    return stress_w
+
     """
     Compute stress in shute direction given stretch and strain energy partial derivatives (in 0-90 orientation)
     :param inputs: tuple containing strain energy derivatives with respect to I1, I2, and I4s, and stretch in w and s
@@ -145,6 +161,18 @@ def Stress_cal_s(inputs):
     stress_s = two * (dWI1 * (stretch_s - stretch_z*stretch_z / stretch_s) +
                       dWI2 * (stretch_w*stretch_w*stretch_s - 1/(stretch_s*stretch_s*stretch_s)) +
                               dWI4_s * stretch_s)
+    return stress_s
+
+def Stress_cal_s_sq(inputs):
+    (dWI1,dWI2,dWI4_s,stretch_w,stretch_s) = inputs
+    one = tf.constant(1.0,dtype='float32')
+    two = tf.constant(2.0,dtype='float32')
+
+    #according to Holzapfel 2009
+    stretch_z = one/(stretch_w*stretch_s)
+    stress_s = 4.0 * (dWI1 * (stretch_s - stretch_z*stretch_z / stretch_s) ** 2 +
+                      dWI2 * (stretch_w*stretch_w*stretch_s - 1/(stretch_s*stretch_s*stretch_s)) ** 2 +
+                              dWI4_s * stretch_s ** 2)
     return stress_s
 
 """
@@ -165,6 +193,19 @@ def Stress_cal_x_45(inputs):
 
     return stress_x
 
+def Stress_cal_x_45_sq(inputs):
+    (dWI1,dWI2,dWI4w, dWI4s, dWI8ws, stretch_x, stretch_y) = inputs
+    one = tf.constant(1.0,dtype='float32')
+    two = tf.constant(2.0,dtype='float32')
+
+    stretch_z = one/(stretch_x*stretch_y)
+    stress_x = 4.0 * (dWI1 * (stretch_x - stretch_z*stretch_z / stretch_x) ** 2 +
+                      dWI2 * (stretch_x*stretch_y*stretch_y - one/(stretch_x*stretch_x*stretch_x)) ** 2) + \
+               dWI4w * stretch_x ** 2 + dWI4s * stretch_x ** 2
+
+
+    return stress_x
+
 """
     Compute stress in y direction given stretch and strain energy partial derivatives (in 45-135 orientation)
     :param inputs: tuple containing strain energy derivatives with respect to I1, I2, I4w, I4s, and I8ws , and stretch in x and y
@@ -179,6 +220,18 @@ def Stress_cal_y_45(inputs):
     stress_y = two * (dWI1 * (stretch_y - stretch_z * stretch_z / stretch_y) +
                       dWI2 * (stretch_x * stretch_x * stretch_y - one / (stretch_y * stretch_y * stretch_y))) + \
                (dWI4f + dWI4n - dWI8fn) * stretch_y
+
+    return stress_y
+
+def Stress_cal_y_45_sq(inputs):
+    (dWI1,dWI2,dWI4w, dWI4s, dWI8fn, stretch_x, stretch_y) = inputs
+    one = tf.constant(1.0,dtype='float32')
+    two = tf.constant(2.0,dtype='float32')
+
+    stretch_z = one/(stretch_x*stretch_y)
+    stress_y = 4.0 * (dWI1 * (stretch_y - stretch_z * stretch_z / stretch_y) ** 2 +
+                      dWI2 * (stretch_x * stretch_x * stretch_y - one / (stretch_y * stretch_y * stretch_y)) ** 2) + \
+               dWI4w * stretch_y ** 2 + dWI4s * stretch_y ** 2
 
     return stress_y
 

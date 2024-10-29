@@ -36,6 +36,7 @@ def get_output_grads(lam_ut_all):  # 1000 x 5 x 2
     stretch_x = lam_ut_all[1, :, 0]
     stretch_y = lam_ut_all[1, :, 1]
     stretch_z_xy = 1 / (stretch_x * stretch_y)
+
     ## Compute gradients of invariants wrt stretches
     output_grads_w = np.stack([2 * (stretch_w - stretch_z_ws * stretch_z_ws / stretch_w),
                                2 * (stretch_w * stretch_s * stretch_s - 1 / (stretch_w * stretch_w * stretch_w)),
@@ -53,5 +54,11 @@ def get_output_grads(lam_ut_all):  # 1000 x 5 x 2
 
     output_grads_wx = np.concatenate([output_grads_w, output_grads_x], axis=0).reshape((-1, 5))
     output_grads_sy = np.concatenate([output_grads_s, output_grads_y], axis=0).reshape((-1, 5))
-    output_grads = np.stack([output_grads_wx, output_grads_sy], axis=-1)
+    output_grads = np.stack([output_grads_wx, output_grads_sy], axis=-1) # N x 5 x 2
     return output_grads
+
+import tensorflow as tf
+
+
+def tf_stack(array, axis=-1):
+    return tf.keras.layers.concatenate([tf.expand_dims(x, axis=axis) for x in array], axis=axis)
