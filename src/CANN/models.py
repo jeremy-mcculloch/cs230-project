@@ -187,8 +187,7 @@ def ortho_cann_3ff(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, s
     Is_max = get_max_inv_mesh(reshape_input_output_mesh(lam_ut_all), modelFit_mode)
     P_ut_reshaped = np.array(reshape_input_output_mesh(P_ut_all))
     lam_ut_reshaped = np.array(reshape_input_output_mesh(lam_ut_all))
-    scale_factors = np.mean(P_ut_reshaped, axis=-1) * (np.max(lam_ut_reshaped, axis=-1) - np.min(lam_ut_reshaped, axis=-1)) # * 10 because there are 5 loading configurations and 2
-    scale_factor = np.sum(scale_factors)
+
 
     # Inputs defined
     I1_in = tf.keras.Input(shape=(1,), name='I1')
@@ -222,8 +221,12 @@ def ortho_cann_3ff(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, s
     if two_term:
         ALL_I_out = tf.keras.layers.concatenate([ALL_I_out[:, term:(term+1)] for term in terms], axis=1)
     terms = ALL_I_out.get_shape().as_list()[1]
-    # ALL_I_out_scaled = keras.layers.Lambda(lambda x: (x / terms * 2 * scale_factor))(ALL_I_out)
-    Psi_model = keras.models.Model(inputs=[I1_in, I2_in, I4f_in, I4n_in, I8fn_in], outputs=[ALL_I_out], name='Psi')
+
+    scale_factors = np.mean(P_ut_reshaped, axis=-1) * (np.max(lam_ut_reshaped, axis=-1) - np.min(lam_ut_reshaped,
+                                                                                                 axis=-1))  # * 10 because there are 5 loading configurations and 2
+    scale_factor = np.sum(scale_factors) / terms * 2
+    ALL_I_out_scaled = keras.layers.Lambda(lambda x: (x * scale_factor))(ALL_I_out)
+    Psi_model = keras.models.Model(inputs=[I1_in, I2_in, I4f_in, I4n_in, I8fn_in], outputs=[ALL_I_out_scaled], name='Psi')
 
     return Psi_model, terms  # 32 terms
 

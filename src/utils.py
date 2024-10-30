@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+# Load stress data from files
 def load_data():
     file_names = ["../inputs/sample_stresses_90.xlsx"] * 5 +  ["../inputs/sample_stresses_45.xlsx"] * 5
     sheetnames = [f"Sheet{i+1}" for i in range(5)] * 2

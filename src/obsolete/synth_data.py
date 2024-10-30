@@ -1,5 +1,8 @@
 import numpy as np
-from utils import *
+from src.utils import *
+
+from src.utils import get_output_grads
+
 
 # def generate_data(num_samples):
 #     log_means = np.array([9.598, 2.824, 2.387, 3.415, 2.752, 1.498, 1.553, 3.207, 1.866, 1.762])
