@@ -38,7 +38,7 @@ matplotlib.rcParams['legend.handleheight'] = 1
 # matplotlib.rcParams['legend.fontsize'] = 60
 
 
-def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms):
+def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms, independent):
 
     #### Get model Predictions ####
     # Means and variances
@@ -55,10 +55,10 @@ def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms):
 
     # Predictions by term
     model_weights = model_given.get_weights()
-    n_terms = len(model_weights) // 3
+    n_terms = len(model_weights) // 2
     stress_pred_terms = np.zeros(shape = stress_pred_mean.shape + (n_terms + 1,))
     for i in range(n_terms):
-        temp_weights = [model_weights[j] * (i == j // 3) for j in range(n_terms * 3)]
+        temp_weights = [model_weights[j] * (i == j // 2 or j==n_terms* 2) for j in range(n_terms * 2 + 1)]
         model_given.set_weights(temp_weights)
         temp_preds = model_given.predict(lam_ut_all).reshape((-1, 2, 2, 2))
         stress_pred_terms[:, :, :, :, i + 1] = stress_pred_terms[:, :, :, :, i] + np.array(temp_preds[:, :, :, 0]).transpose((1, 0, 2)).reshape((2, 5, 5, -1, 2))[:, 0, :, :, :]
@@ -196,7 +196,8 @@ def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms):
         rec = fig.add_artist(rec)
     # Render and save plot
     name = "terms" if terms else "variance"
-    plt.savefig(f"../Results/bcann_{name}.pdf",
+    id = "independent" if independent else "covariance"
+    plt.savefig(f"../Results/bcann_{id}_{name}.pdf",
                 transparent=False,
                 facecolor='white')
 
