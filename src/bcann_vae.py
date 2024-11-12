@@ -8,16 +8,17 @@ import tensorflow as tf
 from tensorflow.python.ops.numpy_ops import np_config
 import matplotlib.pyplot as plt
 
+from src.CANN.cont_mech import modelArchitecture
 from src.utils import *
 import sympy
 from sympy import Symbol, lambdify, diff, exp
 
-from src.CANN.models import SingleInvNet_symbolic, SingleInvNetI4_symbolic
+from src.CANN.models import SingleInvNet_symbolic, SingleInvNetI4_symbolic, ortho_cann_3ff
 import re
 
 from src.CANN.models import I4_theta
 
-from src.CANN.util_functions import reshape_input_output_mesh, traindata
+from src.CANN.util_functions import reshape_input_output_mesh, traindata, makeDIR, Compile_and_fit
 from src.CANN.models import get_max_inv_mesh, calculate_I4theta_max
 
 
@@ -26,14 +27,19 @@ class Encoder(Layer):
     def __init__(self, latent_dim):
         super().__init__()
         self.fcnet = Sequential()
+        self.batchnorm = tf.keras.layers.BatchNormalization()
+        self.batchnorm2 = tf.keras.layers.BatchNormalization()
+
         self.dense1 = Dense(128, activation='relu')
         self.dense2 = Dense(128, activation='relu')
         self.dense3 = Dense(128, activation='relu')
         self.dense4 = Dense(latent_dim * 2) # mean and log std dev
+        self.fcnet.add(self.batchnorm)
         self.fcnet.add(self.dense1)
         self.fcnet.add(self.dense2)
         self.fcnet.add(self.dense3)
         self.fcnet.add(self.dense4)
+        self.fcnet.add(self.batchnorm2)
 
     def call(self, inputs, *args, **kwargs):
         return self.fcnet(inputs)
@@ -46,10 +52,12 @@ class Decoder(Layer):
     def __init__(self, n_params):
         super().__init__()
         self.fcnet = Sequential()
+        self.batchnorm = tf.keras.layers.BatchNormalization()
         self.dense1 = Dense(512, activation='relu')
         self.dense2 = Dense(256, activation='relu')
         self.dense3 = Dense(128, activation='relu')
         self.dense4 = Dense(n_params)
+        self.fcnet.add(self.batchnorm)
         self.fcnet.add(self.dense1)
         self.fcnet.add(self.dense2)
         self.fcnet.add(self.dense3)
@@ -123,9 +131,15 @@ class SingleTermStress(keras.layers.Layer):
         mean = self.w ** (1 / self.p) * self.P_func(inputs, self.wstar)
         return mean
 
-def single_term_stress_vae(Psi_expr, invs, I1s_max, should_normalize=True, p=1.0, w=tf.keras.Input(shape=(1,)), wstar=tf.keras.Input(shape=(1,)), wsigma=tf.keras.Input(shape=(1,))):
+def single_term_stress_vae(Psi_expr, invs, I1s_max, should_normalize=True, p=1.0, w=None, wstar=None, wsigma=None):
+    if w is None:
+        w = tf.keras.Input(shape=(1,))
+        wstar = tf.keras.Input(shape=(1,))
+        wsigma = tf.keras.Input(shape=(1,))
+
     P_func = get_stress_expression(Psi_expr, I1s_max, should_normalize)
-    mean =  w ** (1 / p) * P_func(invs, wstar)
+    invs = tf.cast(invs, tf.float32)
+    mean =  w ** (1 / p) * (P_func(invs, wstar) + invs * 0.0)
     stddev = (mean * wsigma)
     return mean, stddev, [wstar, w, wsigma]
 
@@ -167,16 +181,17 @@ def single_inv_I4_theta_stress_vae(I4_plus, I4_minus, I1s_max, output_grad_plus,
     Psi_funcs = [activations[i](symb_wstar * symb_inv ** exps[i]) for i in range(len(activations))]
     terms_plus = [single_term_stress_vae(Psi_func, I4_plus, I1s_max, should_normalize=should_normalize, p=p) for Psi_func in Psi_funcs]
     params = [x[2] for x in terms_plus] # List of all inputs
-    terms_minus = [single_term_stress_vae(Psi_funcs[i], I4_plus, I1s_max, should_normalize=should_normalize, p=p,
+    terms_minus = [single_term_stress_vae(Psi_funcs[i], I4_minus, I1s_max, should_normalize=should_normalize, p=p,
                                           wstar=params[i][0], w=params[i][1], wsigma=params[i][2]) for i in range(len(Psi_funcs))]
     means = get_stress_mean([x[0] for x in terms_plus], output_grad_plus) + \
                 get_stress_mean([x[0] for x in terms_minus], output_grad_minus)
+    # means = get_stress_mean([x[0] for x in terms_plus], output_grad_plus)
 
     # Add together before squaring for contributions from same term
     stddevs = [terms_plus[i][1][:, :, np.newaxis] * output_grad_plus +
                terms_minus[i][1][:, :, np.newaxis] * output_grad_minus for i in range(len(terms_plus))]
     variance = tf.reduce_sum(tf.stack(stddevs, axis=-1) ** 2, axis=-1)
-    return means, variance, params
+    return means, variance, flatten(params)
 
 def get_I4_theta(I4f, I4n, I8):
     theta = np.pi / 3
@@ -192,12 +207,13 @@ def get_stress_var(arr, output_grad):
 def ortho_cann_3ff_model(lam_ut_all, should_normalize=True, p=1.0):
     # Compute normalizing constants
     modelFit_mode = "0123456789"
+    # Is_max = get_max_inv_mesh(lam_ut_norepeats, modelFit_mode)
     Is_max = get_max_inv_mesh(reshape_input_output_mesh(lam_ut_all), modelFit_mode)
     I4theta_max = calculate_I4theta_max(Is_max)
+    lam_ut_all = np.array(lam_ut_all).transpose((0, 2, 1))
 
-
-
-    invs = get_invs(lam_ut_all)
+    lam_ut_all = tf.constant(lam_ut_all)
+    invs = get_invs(lam_ut_all) # 500 x 2
     invs = tf.constant(invs) # convert to TF for compatibility
 
     I1_in = invs[:, 0] # shape is 1000 x 1
@@ -219,12 +235,12 @@ def ortho_cann_3ff_model(lam_ut_all, should_normalize=True, p=1.0):
     # Compute stress contribution of each gradient
     output_grads = get_output_grads(lam_ut_all)  # 1000 x 5 x 2
     theta = np.pi / 3
-    grad_I4theta = output_grads[:, 2, np.newaxis, :] * (np.cos(theta)) ** 2 \
-              + output_grads[:, 3, np.newaxis, :] * (np.sin(theta)) ** 2 \
-              + output_grads[:, 4, np.newaxis, :] * np.sin(2 * theta)
-    grad_I4negtheta = output_grads[:, 2, np.newaxis, :] * (np.cos(theta)) ** 2 \
-              + output_grads[:, 3, np.newaxis, :] * (np.sin(theta)) ** 2 \
-              - output_grads[:, 4, np.newaxis, :] * np.sin(2 * theta)
+    grad_I4theta = output_grads[:, 2, :] * (np.cos(theta)) ** 2 \
+              + output_grads[:, 3, :] * (np.sin(theta)) ** 2 \
+              + output_grads[:, 4, :] * np.sin(2 * theta)
+    grad_I4negtheta = output_grads[:, 2, :] * (np.cos(theta)) ** 2 \
+              + output_grads[:, 3, :] * (np.sin(theta)) ** 2 \
+              - output_grads[:, 4, :] * np.sin(2 * theta)
 
     I1_mean, I1_var, params1 = single_inv_stress_vae(I1_ref, Is_max[:, 0], output_grads[:, 0, :], should_normalize, p)
     I2_mean, I2_var, params2 = single_inv_stress_vae(I2_ref, Is_max[:, 1], output_grads[:, 0, :], should_normalize, p)
@@ -234,6 +250,7 @@ def ortho_cann_3ff_model(lam_ut_all, should_normalize=True, p=1.0):
                                                                     grad_I4theta, grad_I4negtheta, should_normalize, p)
 
     params_all = params1 + params2 + params4f + params4n + params4theta
+
     out_mean = I1_mean + I2_mean + I4f_mean + I4n_mean + I4theta_mean
     out_var = I1_var + I2_var + I4f_var + I4n_var + I4theta_var
 
@@ -262,12 +279,18 @@ class CANN_VAE(Model):
     def call(self, inputs):
         flat_in = self.flatten(inputs)
         batch = tf.shape(inputs)[0]
-        normal_rand = tf.random.normal(shape=(batch, self.latent_dim), dtype=tf.float64)
+        normal_rand = tf.random.normal(shape=(batch, self.latent_dim), dtype=tf.float32)
         enc_out = self.enc(flat_in)
         latent = enc_out[:, 0:self.latent_dim] + normal_rand * tf.exp(enc_out[:, self.latent_dim:]) # Reparameterization trick
+        # print(latent)
         params = self.dec(latent)
-        means, variances = self.cann_model(tf.split(params, self.n_params, axis=1))
-        rec, kl = nelbo(inputs, means, variances, enc_out)
+        # print(params)
+        params_split = tf.split(params, self.n_params, axis=1)
+        print(params_split)
+        means, variances = self.cann_model(params_split)
+        epsilon = 1e-6
+        rec, kl = nelbo(inputs, means, variances + epsilon, enc_out)
+        # self.add_loss(tf.reduce_min(variances))
         self.add_loss(tf.reduce_mean(rec + kl))
         self.add_metric(tf.reduce_mean(rec), name='rec')
         self.add_metric(tf.reduce_mean(kl), name='kl')
@@ -295,6 +318,72 @@ def kl_loss(enc_out):
     log_sigma = enc_out[:, latent_dim:]
     kls = log_sigma + (1 + means ** 2) / (2 * tf.math.exp(2 * log_sigma)) - 0.5
     return tf.reduce_sum(kls, axis=-1)
+
+
+# Train BCANN based on stretch and stress data provided, or load from file
+# Returns trained model as well as reshaped stretch and stress inputs
+def train_bcann_vae(stretches, stresses, should_train=False, independent=True):
+    # Reshape stretch and stress inputs
+    stretches = np.float64(stretches)
+    stresses = np.float64(stresses) # 2 x (ns x 5 x 100) x 2
+    lam_ut_all = [[stretches.reshape((-1, 500, 2))[0, :, k].flatten() for k in range(2)] for i in range(2)]
+    # P_ut_all = [[stresses.reshape((2, -1, 500, 2))[i, :,:, k].flatten() for k in range(2)] for i in range(2)]
+    P_ut_all = stresses.reshape((2, -1, 500, 2)).transpose((1, 0, 2, 3)).reshape((-1, 1000, 2))
+    # Define hyperparameters
+    modelFit_mode = "0123456789"
+    epochs = 2000
+    batch_size = 10 # may want to increase? also may not matter since so many close by data points
+    gamma_ss = []
+    P_ss = []
+    last_weights = []
+
+    # Iterate over regularization values
+    path2saveResults = '../Results'
+    id = "independent" if independent else "covariance"
+    Save_path = path2saveResults + f'/model_vae_{id}.h5'
+    Save_weights = path2saveResults + f'/weights_vae_{id}'
+    path_checkpoint = path2saveResults + f'/best_weights_vae_{id}'
+
+
+    # Build model
+    model = CANN_VAE(3 * 17, 128, lam_ut_all)
+
+    # Train model
+    if should_train:
+        opti1 = tf.optimizers.Adam(learning_rate=0.001)
+        # Note custom loss (negative log likelihood) is used
+        model.compile(optimizer=opti1) # don't add losses sincen already added
+        # Stop early if loss doesn't decrease for 2000 epochs
+        es_callback = keras.callbacks.EarlyStopping(monitor="loss", min_delta=1e-6, patience=2000,
+                                                    restore_best_weights=True)
+
+        modelckpt_callback = keras.callbacks.ModelCheckpoint(
+            monitor="loss",
+            filepath=path_checkpoint,
+            verbose=0,
+            save_weights_only=True,
+            save_best_only=True,
+        )
+
+        # Is this data format correct ?? TODO
+        history = model.fit(P_ut_all,
+                                  P_ut_all,
+                                  batch_size=batch_size,
+                                  epochs=epochs,
+                                  validation_split=0.0,
+                                  callbacks=[es_callback, modelckpt_callback],
+                                  shuffle=True,
+                                  verbose=1)
+
+
+        model.load_weights(path_checkpoint, by_name=False, skip_mismatch=False)
+        tf.keras.models.save_model(model, Save_path, overwrite=True)
+        model.save_weights(Save_weights, overwrite=True)
+    else:
+        model.load_weights(Save_weights)
+
+
+    return model
 
 
 
@@ -338,7 +427,7 @@ def single_inv_I4_theta_stress_bcann(I4_plus, I4_minus, term_idx, I1s_max, outpu
     return terms # list of pairs
 
 # Create BCANN model
-def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, should_normalize, p, independent):
+def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, should_normalize, p, independent, regularization):
     terms = 17 # 4 x I1, 4 x I2, 3 x I4w, 3 x I4s, 3 x I4theta
     # Not sure Imax calculation is quite working right
     lam_ut_norepeats = reshape_input_output_mesh([[x[0:500] for x in y] for y in lam_ut_all])
@@ -387,9 +476,9 @@ def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, al
     All_I_out = I1_out + I2_out + I4f_out + I4n_out + I4theta_out
     # Mean is sum of terms, variance is sum of squares
     all_terms = tf.stack(All_I_out, axis=-1) * scale_factor
-    print(all_terms.shape)
     mean_out = tf.reduce_sum(all_terms, axis=-1)
-    var_out = tf.reduce_sum(Dense(all_terms.shape[2], kernel_initializer=initializer_1, kernel_constraint=DiagonalNonnegative() if independent else ValidCovariance(), use_bias=False)(all_terms) ** 2, axis=-1)
+    var_constraint = (DiagonalNonnegativeLessThanOne() if regularization else DiagonalNonnegative()) if independent else ValidCovariance()
+    var_out = tf.reduce_sum(Dense(all_terms.shape[2], kernel_initializer=initializer_1, kernel_constraint=var_constraint, use_bias=False)(all_terms) ** 2, axis=-1)
     P_model = keras.models.Model(inputs=[I1_in, I2_in, I4f_in, I4n_in, I8fn_in, dI1_in, dI2_in, dI4f_in, dI4n_in, dI8fn_in],
                                    outputs=[mean_out[:, 0], var_out[:, 0], mean_out[:, 1], var_out[:, 1]], name='P_model')
 
@@ -462,7 +551,7 @@ def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, al
 
 # Train BCANN based on stretch and stress data provided, or load from file
 # Returns trained model as well as reshaped stretch and stress inputs
-def train_bcanns(stretches, stresses, should_train=False, independent=True):
+def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_train=False, id="independent"):
     # Reshape stretch and stress inputs
     stretches = np.float64(stretches)
     stresses = np.float64(stresses) # 2 x (ns x 5 x 100) x 2
@@ -470,9 +559,8 @@ def train_bcanns(stretches, stresses, should_train=False, independent=True):
     P_ut_all = [[stresses.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
 
     # Define hyperparameters
-    modelFit_mode = "0123456789"
-    alphas = [0, 0.1]
-    ps = [1.0, 0.5]
+    alphas =  [0] if id=="unregularized" else [0, 0.3]
+    ps = [1.0] if id=="unregularized" else [1.0 , 0.5]
     epochs = 2000
     batch_size = 1000 # may want to increase? also may not matter since so many close by data points
     gamma_ss = []
@@ -481,8 +569,8 @@ def train_bcanns(stretches, stresses, should_train=False, independent=True):
 
     # Iterate over regularization values
     for i in range(len(alphas)):
-        path2saveResults = '../Results'
-        id = "independent" if independent else "covariance"
+        path2saveResults = '../Results/' + modelFit_mode
+        makeDIR(path2saveResults)
         Save_path = path2saveResults + f'/model_{id}.h5'
         Save_weights = path2saveResults + f'/weights_{id}'
         path_checkpoint = path2saveResults + f'/best_weights_{id}'
@@ -491,8 +579,8 @@ def train_bcanns(stretches, stresses, should_train=False, independent=True):
             continue
 
         # Build model
-        model = ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alphas[i],
-                                                    True, ps[i], independent)
+        model = ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, "0123456789", alphas[i],
+                                                    True, ps[i], id != "correlated", i > 0)
 
 
         # If not the first iteration, set initial weights to be final weights from previous iteration
@@ -500,6 +588,7 @@ def train_bcanns(stretches, stresses, should_train=False, independent=True):
             model.set_weights(last_weights)
 
         # Load training data
+
         model_given, input_train, output_train, sample_weights = traindata(modelFit_mode, model, lam_ut_all, P_ut_all,
                                                                            model, gamma_ss, P_ss, model, 0)
 
@@ -532,7 +621,83 @@ def train_bcanns(stretches, stresses, should_train=False, independent=True):
 
     return model_given, lam_ut_all, P_ut_all
 
+def train_ensemble(stretches, stresses, modelFit_mode = "0123456789abcde", should_train=False):
+    # Reshape stretch and stress inputs
+    stretches = np.float64(stretches)
+    stresses = np.float64(stresses) # 2 x (ns x 5 x 100) x 2
+    n_samples = 5
+    lam_ut_all = [[[stretches.reshape((n_samples, -1, 2))[j, :, k].flatten() for k in range(2)] for i in range(2)] for j in range(n_samples)]
+    P_ut_all = [[[stresses.reshape((2, n_samples, -1, 2))[i, j, :, k].flatten() for k in range(2)] for i in range(2)] for j in range(n_samples)]
 
+    # Define hyperparameters
+    regularization = False
+    alphas = [0, 0.3] if regularization else [0]
+    ps = [1.0 , 0.5] if regularization else [1.0]
+    epochs = 2000 # TODO change back
+    batch_size = 1000 # may want to increase? also may not matter since so many close by data points
+    gamma_ss = []
+    P_ss = []
+    last_weights = []
+    Stress_predict_UT = []
+
+    for sample_idx in range(n_samples):
+        # Iterate over regularization values
+        for i in range(len(alphas)):
+            ##########
+            # Use ogden model with exponents and gains as weights
+            if i < len(alphas) - 1 and not should_train: # If not training, skip to last alpha and load model
+                continue
+
+            # Build model
+            Psi_model, terms = ortho_cann_3ff(lam_ut_all[sample_idx], gamma_ss, P_ut_all[sample_idx], P_ss, modelFit_mode, alphas[i], True, ps[i])
+
+
+            # If not the first iteration, set initial weights to be final weights from previous iteration
+            if i > 0 and should_train:
+                Psi_model.set_weights(last_weights)
+
+            # Create complete model architecture
+            model_UT, model_SS, Psi_model, model = modelArchitecture("mesh", Psi_model)
+
+            # Load training data
+            model_given, input_train, output_train, sample_weights = traindata(modelFit_mode, model_UT, lam_ut_all[sample_idx], P_ut_all[sample_idx],
+                                                                               model_SS, gamma_ss, P_ss, model, 0, is_bcann=True, should_normalize=True)
+
+
+            # model_given.summary(print_fn=print)
+            path2saveResults = '../Results/' + modelFit_mode + f"/ensemble_{sample_idx}"
+            makeDIR(path2saveResults)
+            Save_path = path2saveResults + f'/model.h5'
+            Save_weights = path2saveResults + f'/weights'
+            path_checkpoint = path2saveResults + f'/best_weights'
+
+            # Train model
+            if should_train:
+
+                model_given, history, weight_hist_arr = Compile_and_fit(model_given, input_train, output_train, epochs,
+                                                                        path_checkpoint,
+                                                                        sample_weights, batch_size)
+
+                model_given.load_weights(path_checkpoint, by_name=False, skip_mismatch=False)
+                tf.keras.models.save_model(Psi_model, Save_path, overwrite=True)
+                Psi_model.save_weights(Save_weights, overwrite=True)
+                last_weights = model_given.get_weights()
+
+                if i < len(ps) - 1:  # If not last iteration, update last_weights so it is correct for the next value of p
+                    p_ratio = ps[i + 1] / ps[i]
+                    last_weights = [last_weights[i] ** (p_ratio if (i % 2 == 1) else 1.0) for i in
+                                    range(len(last_weights))]
+            else:
+                Psi_model.load_weights(Save_weights)
+
+
+        Stress_predict_UT.append(model_UT.predict(lam_ut_all))
+
+    Stress_predict_all = np.squeeze(np.array(Stress_predict_UT)).transpose((0, 1, 3, 2)).reshape((5, 2, 5, -1, 2))
+    Stress_predict_mean = np.mean(Stress_predict_all, axis=0)
+    Stress_predict_std = np.std(Stress_predict_all, axis=0)
+
+    return Stress_predict_mean, Stress_predict_std, lam_ut_all, P_ut_all
 
 # Display strain energy equation and weights (with variances)
 def disp_equation_weights_bcann(weights, lam_ut_all, P_ut_all, modelFit_mode):
@@ -549,19 +714,22 @@ def disp_equation_weights_bcann(weights, lam_ut_all, P_ut_all, modelFit_mode):
         gain = term.args[0] * sf * 2 ## * 2 accounts for 1/2 we add later
         if term.args[1].func == sympy.core.add.Add: # Print exponential weights
             n_abs += 1
-            exponent = term.args[1].args[-1].args[0][0].args[0]
+            try:
+                exponent = term.args[1].args[-1].args[0][0].args[0]
+            except:
+                print(term)
             gain *= exponent
-            std_dev = gain * np.sqrt(w_var)
-            print(f"a_{n_abs} = {gain:.4g}\\pm{std_dev:.4f}"+  "\\text{ kPa}")
-            print(f"b_{n_abs} = {exponent:.4g}")
+            std_dev = float(gain * np.sqrt(w_var))
+            print(f"a_{n_abs} = {gain:.2g}\\pm{std_dev:.2g}"+  "\\text{ kPa}")
+            print(f"b_{n_abs} = {exponent:.2g}")
             term_str = f"a_{n_abs}(" + str(term.args[1]) + f") / b_{n_abs}"
             term_str = re.sub(r'\d+\.\d\d\d+', f"b_{n_abs}", term_str)
 
         else: # Print non-exponential weights
             n_mus += 1
             term_str = f"\mu_{n_mus}" + str(term.args[1])
-            std_dev = gain * np.sqrt(w_var)
-            print(f"\mu_{n_mus} = {gain:.4g}\\pm{std_dev:.4g}" +  "\\text{ kPa}")
+            std_dev = float(gain * np.sqrt(w_var))
+            print(f"\mu_{n_mus} = {gain:.2g}\\pm{std_dev:.2g}" +  "\\text{ kPa}")
 
         # Perform substitutions so it renders correctly
         term_str = term_str.replace("**", "^")
@@ -641,7 +809,7 @@ def Compile_and_fit_bcann(model_given, input_train, output_train, epochs, path_c
         weight_hist_arr.append(model_given.get_weights()))
 
     # Reshape output_train to be a single tf array
-    output_temp = tf.keras.backend.stack(flatten(output_train),axis=1) #
+    output_temp = tf.keras.backend.stack(flatten(output_train) + flatten(sample_weights),axis=1) #
     output_temp = tf.cast(output_temp, tf.float32)
 
     history = model_given.fit(input_train,
@@ -661,8 +829,11 @@ def NLL(y_true, y_pred):
     # Separate mean and variance
     means = y_pred[:, 0::2]
     vars = y_pred[:, 1::2]
+
+    y_wgts = y_true[:, 4:]
+    y_true = y_true[:, 0:4]
     # Compute negative log likelihood for a normal distribution
-    errors = 0.5 * (tf.math.log(2 * np.pi * (vars + eps)) + tf.math.square(y_true - means) / (vars + eps))
+    errors = 0.5 * (tf.math.log(2 * np.pi * (vars + eps)) + tf.math.square(y_true - means) / (vars + eps)) * y_wgts
     return tf.reduce_sum(errors, axis=1)
 
 # Constrains weights to be between 0.0 and 1.0
@@ -671,13 +842,21 @@ class NonNegLessThanOne(keras.constraints.Constraint):
         return tf.clip_by_value(w, 0.0, 1.0)
 
 
-class DiagonalNonnegative(keras.constraints.Constraint):
+class DiagonalNonnegativeLessThanOne(keras.constraints.Constraint):
     """Constrains the weights to be diagonal and nonnegative
     """
     def __call__(self, w):
         N = tf.keras.backend.int_shape(w)[-1]
         m = tf.eye(N)
         return m * tf.clip_by_value(w, 0, 1.0)
+
+class DiagonalNonnegative(keras.constraints.Constraint):
+    """Constrains the weights to be diagonal and nonnegative
+    """
+    def __call__(self, w):
+        N = tf.keras.backend.int_shape(w)[-1]
+        m = tf.eye(N)
+        return m * tf.clip_by_value(w, 0, np.inf)
 
 class ValidCovariance(keras.constraints.Constraint):
     def __call__(self, w):

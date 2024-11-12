@@ -112,7 +112,6 @@ def ortho_cann_3ff_model(lam_ut_all):
     # Inputs defined
 
     invs = get_invs(lam_ut_all)
-    invs = tf.constant(invs)
 
     I1_in = invs[:, 0]
     I2_in = invs[:, 1]

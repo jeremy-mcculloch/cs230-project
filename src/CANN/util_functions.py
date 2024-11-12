@@ -209,7 +209,7 @@ def getStressStrain(dfs, Region):
 
 
 # Get relevant training data given model fitting mode and whether you are fitting the strain energy or the stress
-def traindata(modelFit_mode, model_UT, lam_ut, P_ut, model_SS, gamma_ss, P_ss, model, midpoint):
+def traindata(modelFit_mode, model_UT, lam_ut, P_ut, model_SS, gamma_ss, P_ss, model, midpoint, is_bcann=True, should_normalize=False):
     if modelFit_mode == 'T':
         model_given = model_UT
         input_train = lam_ut[midpoint:]
@@ -266,17 +266,26 @@ def traindata(modelFit_mode, model_UT, lam_ut, P_ut, model_SS, gamma_ss, P_ss, m
             output_train = [[P_ut], [P_ss]]
         sample_weights = [[np.array([1.0 / np.max(np.abs(x[0]))] * x[0].shape[0])] for x in output_train]
 
-
+    elif is_bcann:
+        model_given = model
+        input_train = lam_ut + gamma_ss
+        output_train = P_ut + P_ss
+        # Assume we are using mesh
+        modes = [int(x, 16) for x in modelFit_mode] # 0 - 14
+        sample_weights_90 = [np.concatenate([np.ones_like(np.array_split(y, 5)[test]) * ((1.0 / np.max(np.array_split(y, 5)[test]) if should_normalize else 1.0) if (2 * test + axis) in modes else 0.0)
+                             for y in np.array_split(output_train[0][axis], 5) for test in range(5)]) for axis in range(2)]
+        sample_weights_45 = [np.concatenate([np.ones_like(np.array_split(y, 5)[test]) * ((1.0 / np.max(np.array_split(y, 5)[test]) if should_normalize else 1.0) if (10 + test * axis + (1 - axis) * (4 - test)) in modes else 0.0)
+                             for y in np.array_split(output_train[1][axis], 5) for test in range(5)]) for axis in range(2)]
+        sample_weights = [sample_weights_90, [x / 2.0 for x in sample_weights_45]]
     elif modelFit_mode.isnumeric():
         model_given = model
         input_train = lam_ut + gamma_ss
         output_train = P_ut + P_ss
         # Assume we are using mesh
         modes = [int(x) for x in modelFit_mode]
-
         sample_weights = [[np.concatenate([np.ones_like(np.array_split(y, 5)[j]) *
-                                           ((1 / np.max(np.array_split(y, 5)[j])) ** 2 if (5 * i + j) in modes else 0.0) for j in range(5)])
-                           for y in output_train[i]] for i in range(len(output_train))]
+            ((1 / np.max(np.array_split(y, 5)[j])) ** 2 if (5 * i + j) in modes else 0.0) for j in range(5)])
+                               for y in output_train[i]] for i in range(len(output_train))]
         sample_weights = [sample_weights[0], [x / 2.0 for x in sample_weights[1]]] # This weights +/- 45 less since there are half as many distinct experiments
     else:
         print("Invalid Model Fit Mode:", modelFit_mode)
