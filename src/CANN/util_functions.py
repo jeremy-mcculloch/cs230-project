@@ -228,7 +228,7 @@ def traindata(modelFit_mode, model_UT, lam_ut, P_ut, model_SS, gamma_ss, P_ss, m
         output_train = P_ut
 
         if type(output_train) is list:
-            sample_weights = [[np.concatenate([np.ones_like(z) / np.max(z) for z in np.array_split(y, 5)]) for y in x] for x in output_train]
+            sample_weights = [[np.concatenate([np.ones_like(z) / np.max(z)**2 for z in np.array_split(y, 5)]) for y in x] for x in output_train]
             # if type(output_train[0]) is list:
             #     sample_weights = [[np.array([1.0 / np.max(np.abs(x[0]))] * x[0].shape[0])] for x in output_train]
             # else:

@@ -67,6 +67,9 @@ def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms, id, modelFit
 
 def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank):
 
+    i_dev = 9
+    i_test = 13
+
     stretch_plot = stretches.reshape((2, 5, 5, -1, 2))[0, 0, :, :, :]  # 5 x 100 x 2
     stress_true = stresses.reshape((2, 5, 5, -1, 2)) # 2 x 5(n_ex) x 5 x 100 x 2( x/y)
 
@@ -94,6 +97,7 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
     cmaplist = [cmap(i) for i in range(cmap.N)]
 
     num_points = 17
+    train_loss = 0
     for i in range(len(axes)):
         if terms:
             n_terms = stress_pred_terms.shape[-1] - 1
@@ -112,6 +116,10 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
             errors = 0.5 * (np.log(2 * np.pi * (pred_std[i] ** 2 + eps)) + (outputs[i][:, :] - pred_mean[i]) ** 2 / (
                         pred_std[i] ** 2 + eps)) # Result should be 5 x 100
             nll = np.sum(errors)
+            if i == i_dev or i == i_test:
+                print(("Test" if i == i_test else "Dev") + f" Loss: {nll}")
+            else:
+                train_loss += nll
 
         # Create plot that draws a line on the upper bound
         axes[i].plot(inputs[i], pred_mean[i], lw=4, zorder=24, color='k')
@@ -165,6 +173,8 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
 
         if titles[i] is not None:
             axes[i].set_title(titles[i], y=1.05, usetex=False)
+
+    print(f"Train Loss: {train_loss}")
 
     if terms:
         labels = [x for In in range(1, 3) for x in

@@ -559,7 +559,7 @@ def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_
     P_ut_all = [[stresses.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
 
     # Define hyperparameters
-    alphas =  [0] if id=="unregularized" else [0, 0.3]
+    alphas =  [0] if id=="unregularized" else [0, 0.0]
     ps = [1.0] if id=="unregularized" else [1.0 , 0.5]
     epochs = 2000
     batch_size = 1000 # may want to increase? also may not matter since so many close by data points
@@ -580,7 +580,7 @@ def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_
 
         # Build model
         model = ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, "0123456789", alphas[i],
-                                                    True, ps[i], id != "correlated", i > 0)
+                                                    True, ps[i], not ("correlated" in id), i > 0)
 
 
         # If not the first iteration, set initial weights to be final weights from previous iteration
