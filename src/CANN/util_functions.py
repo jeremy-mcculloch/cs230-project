@@ -353,3 +353,8 @@ def export_graphs():
     shutil.copy(os.path.join(get_path(Region, "0123456789"), "cann_I4w_theta", "0", "r2_bestfit.pdf"), os.path.join(output_folder, "r2_bestfit.pdf"))
     shutil.copy(os.path.join(get_path(Region, "0123456789"), "cann_I4ws", "0", "r2_archcomp.pdf"), os.path.join(output_folder, "r2_archcomp.pdf"))
 
+def disp_mat(matrix):
+    print("\\begin{bmatrix}")
+    for i in range(matrix.shape[0]):
+        print(" & ".join([f"{x:.2f}" for x in matrix[i, :].tolist()]) + "\\\\")
+    print("\\end{bmatrix})")

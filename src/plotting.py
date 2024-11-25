@@ -38,7 +38,7 @@ matplotlib.rcParams['legend.handleheight'] = 1
 # matplotlib.rcParams['legend.fontsize'] = 60
 
 
-def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms, id, modelFit_mode, blank=False):
+def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms, id, modelFit_mode, plot_dist=True, blank=False):
 
     #### Get model Predictions ####
     # Means and variances
@@ -63,10 +63,9 @@ def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms, id, modelFit
         stress_pred_terms[:, :, :, :, i + 1] = stress_pred_terms[:, :, :, :, i] + np.array(temp_preds[:, :, :, 0]).transpose((1, 0, 2)).reshape((2, 5, 5, -1, 2))[:, 0, :, :, :]
     model_given.set_weights(model_weights)
 
-    plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank)
+    plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank, plot_dist)
 
-def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank):
-
+def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank, plot_dist):
     i_dev = 9
     i_test = 13
 
@@ -109,13 +108,13 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
                 axes[i].plot(inputs[i], pred_terms[i][:, j + 1],  lw=0.4, zorder=23, color='k')
         else:
             # Create plot that fills between the lower and upper bound
-            axes[i].fill_between(inputs[i], pred_mean[i] - pred_std[i], pred_mean[i] + pred_std[i], lw=0, zorder=i + 1, color="#C0C7EC",
+            axes[i].fill_between(inputs[i], pred_mean[i] - pred_std[i], pred_mean[i] + pred_std[i], lw=0, zorder=0, color="#384ebc", alpha = 0.25,
                              label=i + 1)
             eps = 1e-6
             # Compute negative log likelihood for a normal distribution
             errors = 0.5 * (np.log(2 * np.pi * (pred_std[i] ** 2 + eps)) + (outputs[i][:, :] - pred_mean[i]) ** 2 / (
                         pred_std[i] ** 2 + eps)) # Result should be 5 x 100
-            nll = np.sum(errors)
+            nll = np.mean(errors)
             if i == i_dev or i == i_test:
                 print(("Test" if i == i_test else "Dev") + f" Loss: {nll}")
             else:
@@ -141,9 +140,21 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
             inputs[i] = np.linspace(np.min(input_old), np.max(input_old), num_points)
             outputs[i] = np.array([np.interp(inputs[i], input_old, outputs[i][j, :]) for j in range(5)])
 
-        for j in range(5):
-            scatterplot = axes[i].scatter(inputs[i], outputs[i][j, :], s=300, zorder=25, lw=3, facecolors='w', edgecolors='k',
-                                        clip_on=False)
+        if terms or not plot_dist:
+            for j in range(5):
+                scatterplot = axes[i].scatter(inputs[i], outputs[i][j, :], s=300, zorder=25, lw=3, facecolors='w', edgecolors='k',
+                                            clip_on=False)
+        else:
+            data_mean = np.mean(outputs[i], axis=0)
+            data_std = np.std(outputs[i], axis=0)
+            data_std_sample = np.std(outputs[i], axis=0, ddof=1)
+            errors = 0.5 * (np.log(2 * np.pi * (data_std ** 2 + eps)) + (outputs[i][:, :] - data_mean) ** 2 / (
+                    data_std ** 2 + eps))  # Result should be 5 x 100
+            nll_min = np.mean(errors)
+            axes[i].fill_between(inputs[i], data_mean - data_std_sample, data_mean + data_std_sample, lw=0, zorder=1,
+                                 color="#FF0000", alpha = 0.25, label=i + 1)
+            axes[i].plot(inputs[i], data_mean, lw=4, zorder=24, color='#FF0000')
+
         axes[i].set_xlabel(direction_strings[i] + " stretch [-]", labelpad=-40)
         axes[i].set_ylabel(direction_strings[i] + " stress [kPa]", labelpad=-40)
         axes[i].minorticks_on()
@@ -167,7 +178,7 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
         # secax.set_xlabel("Temp", labelpad=-50)
 
         if not terms:
-            secax.set_xlabel(f"NLL = {nll:.2f}", labelpad=-50)
+            secax.set_xlabel(f"Extra NLL = {nll - nll_min:.2f}", labelpad=-50)
             # axes[i].get_shared_y_axes().get_siblings(axes[i])[0].set_xlabel(f"$R^2$ = {r2:.4f}",
             #                                                                             labelpad=-50)
 
@@ -224,7 +235,7 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
         rec.set_zorder(1000)
         rec = fig.add_artist(rec)
     # Render and save plot
-    name = "terms" if terms else "variance"
+    name = "terms" if terms else ("variance2" if plot_dist else "variance1")
     if blank:
         plt.savefig(f"../Results/{modelFit_mode}/raw_data.pdf",
                     transparent=False,

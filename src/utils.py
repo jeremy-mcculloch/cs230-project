@@ -3,13 +3,34 @@ import pandas as pd
 
 # Load stress data from files
 def load_data():
+    # List of length 2 * Ns where Ns is the number of samples
+    # List file and sheet names where data is stored, first 5 sheets are all 5 samples in the 0/90 orientation, next 5 sheets are the 5 samples in the +/-45 orientation
     file_names = ["../inputs/sample_stresses_90.xlsx"] * 5 +  ["../inputs/sample_stresses_45.xlsx"] * 5
     sheetnames = [f"Sheet{i+1}" for i in range(5)] * 2
+    # Load from each sheet which should have dimensions 500 x 4
+    # 5 experiments * 100 datapoints per experiment, 4 columns are x stretch, y stretch, x stress, y stress
+    # Reshape to be 2 x (Ns*500) x 4
     loading_data_all = np.array([pd.read_excel(file_names[i], sheet_name=sheetnames[i], engine='openpyxl').to_numpy() for i in
-                       range(len(file_names))]).reshape(2, -1, 4)  ## 100 rows x 10 columns
+                       range(len(file_names))]).reshape(2, -1, 4)
+    # Seperate into stretch and stress (both 2 x (Ns*500) x 2)
     stretches = loading_data_all[:, :, 0:2]
     stresses = loading_data_all[:, :, 2:]
     return stretches, stresses
+
+# def load_data_vae():
+#     # List of length 2 * Ns where Ns is the number of samples
+#     # List file and sheet names where data is stored, first 5 sheets are all 5 samples in the 0/90 orientation, next 5 sheets are the 5 samples in the +/-45 orientation
+#     file_name = "../inputs/data_out.xlsx"
+#     sheetnames = [f"Sheet{i+1}" for i in range(5)] * 2
+#     # Load from each sheet which should have dimensions 500 x 4
+#     # 5 experiments * 100 datapoints per experiment, 4 columns are x stretch, y stretch, x stress, y stress
+#     # Reshape to be 2 x (Ns*500) x 4
+#     loading_data_all = np.array([pd.read_excel(file_name[i], sheet_name=sheetnames[i], engine='openpyxl').to_numpy() for i in
+#                        range(len(sheetnames))]).reshape(2, -1, 4)
+#     # Seperate into stretch and stress (both 2 x (Ns*500) x 2)
+#     stretches = loading_data_all[:, :, 0:2]
+#     stresses = loading_data_all[:, :, 2:]
+#     return stretches, stresses
 
 def get_invs(stretches): # 2 x 500 x 2
     ## 0-90

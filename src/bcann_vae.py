@@ -74,6 +74,7 @@ symb_wstar = Symbol("wstar")
 symb_inv = Symbol("inv")
 initializer_1 = tf.keras.initializers.RandomUniform(minval=0., maxval=1)
 
+# Function for converting symbolic expression of Psi to stress (with regularization)
 def get_stress_expression(Psi_expr, I1s_max, should_normalize=True):
     # Compute max I1
     I1s_max = tf.cast(I1s_max, tf.float32)
@@ -89,6 +90,7 @@ def get_stress_expression(Psi_expr, I1s_max, should_normalize=True):
     out_func = P_out if should_normalize else P_func
     return out_func
 
+# Custom layer that maps invariant I to derivative dPsi / dI, where Psi is specified by a sympy expression
 class SingleTermStress(keras.layers.Layer):
     def __init__(self, kernel_initializer, Psi_expr, weight_name, should_normalize, p, alpha, I1s_max):
         super().__init__()
@@ -429,13 +431,15 @@ def single_inv_I4_theta_stress_bcann(I4_plus, I4_minus, term_idx, I1s_max, outpu
 # Create BCANN model
 def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, should_normalize, p, independent, regularization):
     terms = 17 # 4 x I1, 4 x I2, 3 x I4w, 3 x I4s, 3 x I4theta
-    # Not sure Imax calculation is quite working right
-    lam_ut_norepeats = reshape_input_output_mesh([[x[0:500] for x in y] for y in lam_ut_all])
-    Is_max = get_max_inv_mesh(lam_ut_norepeats, modelFit_mode)
-    P_ut_reshaped = np.array(reshape_input_output_mesh(P_ut_all))
-    lam_ut_reshaped = np.array(reshape_input_output_mesh(lam_ut_all))
-    scale_factors = np.mean(P_ut_reshaped, axis=-1) * (np.max(lam_ut_reshaped, axis=-1) - np.min(lam_ut_reshaped, axis=-1)) # * 10 because there are 5 loading configurations and 2
+    # Compute scale_factor (number to multiply all outputs by to help training stability)
+    # and Is_max (maximum value of each invariant, incorporated into strain energy to ensure comparable initial stability)
+    lam_ut_norepeats = reshape_input_output_mesh([[x[0:500] for x in y] for y in lam_ut_all]) # stretch values for first sample
+    Is_max = get_max_inv_mesh(lam_ut_norepeats, modelFit_mode) # compute maximum invariants
+    P_ut_reshaped = np.array(reshape_input_output_mesh(P_ut_all)) # Reshape stress
+    lam_ut_reshaped = np.array(reshape_input_output_mesh(lam_ut_all)) # Reshape stretch
+    scale_factors = np.mean(P_ut_reshaped, axis=-1) * (np.max(lam_ut_reshaped, axis=-1) - np.min(lam_ut_reshaped, axis=-1)) # compute the integral of the measured stress
     scale_factor = (np.sum(scale_factors) / terms * 2)
+    # Divide stress integral by number of terms and multiply by 2 so if each term has an integral of 0.5 in expectation then the stress will be the correct magnitude
     I4theta_max = calculate_I4theta_max(Is_max)
 
 
@@ -450,13 +454,15 @@ def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, al
     dI4f_in = tf.keras.Input(shape=(2,), name='dI4f')
     dI4n_in = tf.keras.Input(shape=(2,), name='dI4n')
     dI8fn_in = tf.keras.Input(shape=(2,), name='dI8fn')
-    I4theta, I4negtheta = I4_theta()([I4f_in, I4n_in, I8fn_in])
 
     # Put invariants in the reference configuration
     I1_ref = keras.layers.Lambda(lambda x: (x-3.0))(I1_in)
     I2_ref = keras.layers.Lambda(lambda x: (x-3.0))(I2_in)
     I4f_ref = keras.layers.Lambda(lambda x: (x-1.0))(I4f_in)
     I4n_ref = keras.layers.Lambda(lambda x: (x-1.0))(I4n_in)
+
+    # Compute I4 theta
+    I4theta, I4negtheta = I4_theta()([I4f_in, I4n_in, I8fn_in])
     I4theta_ref = keras.layers.Lambda(lambda x: (x-1.0))(I4theta)
     I4negtheta_ref = keras.layers.Lambda(lambda x: (x-1.0))(I4negtheta)
 
@@ -474,11 +480,14 @@ def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, al
 
     # Concatenate terms
     All_I_out = I1_out + I2_out + I4f_out + I4n_out + I4theta_out
-    # Mean is sum of terms, variance is sum of squares
+    # Mean is sum of terms
     all_terms = tf.stack(All_I_out, axis=-1) * scale_factor
     mean_out = tf.reduce_sum(all_terms, axis=-1)
+    # Multiply the terms by L (lower triangular) then take sum of squares, where Sigma = LL^T is the covariance matrix
+    # If independent then L must be diagonal
     var_constraint = (DiagonalNonnegativeLessThanOne() if regularization else DiagonalNonnegative()) if independent else ValidCovariance()
     var_out = tf.reduce_sum(Dense(all_terms.shape[2], kernel_initializer=initializer_1, kernel_constraint=var_constraint, use_bias=False)(all_terms) ** 2, axis=-1)
+    # Create model to map from invariants and invariant derivatives to stress means and variances
     P_model = keras.models.Model(inputs=[I1_in, I2_in, I4f_in, I4n_in, I8fn_in, dI1_in, dI2_in, dI4f_in, dI4n_in, dI8fn_in],
                                    outputs=[mean_out[:, 0], var_out[:, 0], mean_out[:, 1], var_out[:, 1]], name='P_model')
 
@@ -549,20 +558,20 @@ def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, al
     return model
 
 
-# Train BCANN based on stretch and stress data provided, or load from file
+# Train BCANN based on stretch and stress data provided
 # Returns trained model as well as reshaped stretch and stress inputs
 def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_train=False, id="independent"):
     # Reshape stretch and stress inputs
     stretches = np.float64(stretches)
-    stresses = np.float64(stresses) # 2 x (ns x 5 x 100) x 2
-    lam_ut_all = [[stretches.reshape((-1, 2))[:, k].flatten() for k in range(2)] for i in range(2)]
+    stresses = np.float64(stresses) # 2 x (ns*500) x 2
+    lam_ut_all = [[stretches.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
     P_ut_all = [[stresses.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
 
     # Define hyperparameters
-    alphas =  [0] if id=="unregularized" else [0, 0.0]
+    alphas =  [0] if id=="unregularized" else [0, 0.1] # Change as needed
     ps = [1.0] if id=="unregularized" else [1.0 , 0.5]
     epochs = 2000
-    batch_size = 1000 # may want to increase? also may not matter since so many close by data points
+    batch_size = 1000
     gamma_ss = []
     P_ss = []
     last_weights = []
@@ -588,7 +597,6 @@ def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_
             model.set_weights(last_weights)
 
         # Load training data
-
         model_given, input_train, output_train, sample_weights = traindata(modelFit_mode, model, lam_ut_all, P_ut_all,
                                                                            model, gamma_ss, P_ss, model, 0)
 
@@ -699,6 +707,8 @@ def train_ensemble(stretches, stresses, modelFit_mode = "0123456789abcde", shoul
 
     return Stress_predict_mean, Stress_predict_std, lam_ut_all, P_ut_all
 
+def format_2sigfigs(x):
+    return f"{x:.0f}" if x >= 100 else f"{x:.2g}"
 # Display strain energy equation and weights (with variances)
 def disp_equation_weights_bcann(weights, lam_ut_all, P_ut_all, modelFit_mode):
     sf, terms, weights_var = ortho_bcann_4ff_symbolic(weights, lam_ut_all, P_ut_all, modelFit_mode)
@@ -713,15 +723,16 @@ def disp_equation_weights_bcann(weights, lam_ut_all, P_ut_all, modelFit_mode):
             continue
         gain = term.args[0] * sf * 2 ## * 2 accounts for 1/2 we add later
         if term.args[1].func == sympy.core.add.Add: # Print exponential weights
-            n_abs += 1
             try:
                 exponent = term.args[1].args[-1].args[0][0].args[0]
             except:
-                print(term)
+                # print(term)
+                continue
+            n_abs += 1
             gain *= exponent
             std_dev = float(gain * np.sqrt(w_var))
-            print(f"a_{n_abs} = {gain:.2g}\\pm{std_dev:.2g}"+  "\\text{ kPa}")
-            print(f"b_{n_abs} = {exponent:.2g}")
+            print(f"$a_{n_abs} = {format_2sigfigs(gain)}\\pm{format_2sigfigs(std_dev)}" + "\\text{ kPa}$\\newline")
+            print(f"$b_{n_abs} = {format_2sigfigs(exponent)}$\\newline")
             term_str = f"a_{n_abs}(" + str(term.args[1]) + f") / b_{n_abs}"
             term_str = re.sub(r'\d+\.\d\d\d+', f"b_{n_abs}", term_str)
 
@@ -729,7 +740,8 @@ def disp_equation_weights_bcann(weights, lam_ut_all, P_ut_all, modelFit_mode):
             n_mus += 1
             term_str = f"\mu_{n_mus}" + str(term.args[1])
             std_dev = float(gain * np.sqrt(w_var))
-            print(f"\mu_{n_mus} = {gain:.2g}\\pm{std_dev:.2g}" +  "\\text{ kPa}")
+            print(f"$\mu_{n_mus} = {format_2sigfigs(gain)}\\pm{format_2sigfigs(std_dev)}" +  "\\text{ kPa}$\\newline")
+
 
         # Perform substitutions so it renders correctly
         term_str = term_str.replace("**", "^")
@@ -743,7 +755,7 @@ def disp_equation_weights_bcann(weights, lam_ut_all, P_ut_all, modelFit_mode):
         term_str = term_str.replace("[", "")
         term_str = term_str.replace("]", "")
         term_str = "&+&\\frac{1}{2}" + term_str
-
+        term_str += "\n"
         # Append term to equation
         if "I4theta" in term_str:
             eqn += term_str.replace("I4theta", "(I_{4s_I} - 1)")
