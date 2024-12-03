@@ -56,11 +56,13 @@ class Decoder(Layer):
         self.dense1 = Dense(512, activation='relu')
         self.dense2 = Dense(256, activation='relu')
         self.dense3 = Dense(128, activation='relu')
-        self.dense4 = Dense(n_params)
+        self.batchnorm2 = tf.keras.layers.BatchNormalization()
+        self.dense4 = Dense(n_params, activation=tf.math.exp)
         self.fcnet.add(self.batchnorm)
         self.fcnet.add(self.dense1)
         self.fcnet.add(self.dense2)
         self.fcnet.add(self.dense3)
+        self.fcnet.add(self.batchnorm2)
         self.fcnet.add(self.dense4)
 
 
@@ -208,14 +210,15 @@ def get_stress_var(arr, output_grad):
     return tf.reduce_sum(tf.stack(arr, axis=-1) ** 2, axis=-1, keepdims=True) * output_grad ** 2
 def ortho_cann_3ff_model(lam_ut_all, should_normalize=True, p=1.0):
     # Compute normalizing constants
-    modelFit_mode = "0123456789"
+    modelFit_mode = "012" # Only 3 experiments
     # Is_max = get_max_inv_mesh(lam_ut_norepeats, modelFit_mode)
-    Is_max = get_max_inv_mesh(reshape_input_output_mesh(lam_ut_all), modelFit_mode)
+    Is_max = get_max_inv_mesh(reshape_input_output_mesh([lam_ut_all, lam_ut_all], n_exps=3), modelFit_mode)
     I4theta_max = calculate_I4theta_max(Is_max)
-    lam_ut_all = np.array(lam_ut_all).transpose((0, 2, 1))
+    # lam_ut_all = np.array(lam_ut_all).transpose((0, 2, 1))
 
-    lam_ut_all = tf.constant(lam_ut_all)
-    invs = get_invs(lam_ut_all) # 500 x 2
+    lam_ut_all = tf.constant(np.array(lam_ut_all).transpose())
+    print(lam_ut_all.shape)
+    invs = get_invs(lam_ut_all) # 300 x 2
     invs = tf.constant(invs) # convert to TF for compatibility
 
     I1_in = invs[:, 0] # shape is 1000 x 1
@@ -244,17 +247,19 @@ def ortho_cann_3ff_model(lam_ut_all, should_normalize=True, p=1.0):
               + output_grads[:, 3, :] * (np.sin(theta)) ** 2 \
               - output_grads[:, 4, :] * np.sin(2 * theta)
 
+
     I1_mean, I1_var, params1 = single_inv_stress_vae(I1_ref, Is_max[:, 0], output_grads[:, 0, :], should_normalize, p)
     I2_mean, I2_var, params2 = single_inv_stress_vae(I2_ref, Is_max[:, 1], output_grads[:, 0, :], should_normalize, p)
     I4f_mean, I4f_var, params4f = single_inv_I4_stress_vae(I4f_ref, Is_max[:, 2], output_grads[:, 0, :], should_normalize, p)
     I4n_mean, I4n_var, params4n = single_inv_I4_stress_vae(I4n_ref, Is_max[:, 4], output_grads[:, 0, :], should_normalize, p)
-    I4theta_mean, I4theta_var, params4theta = single_inv_I4_theta_stress_vae(I4theta_ref, I4negtheta_ref, Is_max[:, 4],
+    I4theta_mean, I4theta_var, params4theta = single_inv_I4_theta_stress_vae(I4theta_ref, I4negtheta_ref, I4theta_max,
                                                                     grad_I4theta, grad_I4negtheta, should_normalize, p)
 
-    params_all = params1 + params2 + params4f + params4n + params4theta
+    extra_variance = tf.keras.Input(shape=(1,), name="extra_variance")
+    params_all = params1 + params2 + params4f + params4n + params4theta + [extra_variance]
 
     out_mean = I1_mean + I2_mean + I4f_mean + I4n_mean + I4theta_mean
-    out_var = I1_var + I2_var + I4f_var + I4n_var + I4theta_var
+    out_var = I1_var + I2_var + I4f_var + I4n_var + I4theta_var + extra_variance[:, :, np.newaxis]
 
     # final shape is None x 1000 x 2
     model = keras.models.Model(inputs=params_all, outputs=[out_mean, out_var])
@@ -267,9 +272,9 @@ class CANN_VAE(Model):
         self.latent_dim = latent_dim
         self.lam_ut_all = lam_ut_all
         self.enc = Encoder(latent_dim)
-        self.dec = Decoder(n_params)
+        self.dec = Decoder(n_params + 1)
         self.flatten = Flatten()
-        self.cann_model = ortho_cann_3ff_model(self.lam_ut_all)
+        self.cann_model = ortho_cann_3ff_model(lam_ut_all)
 
 
     def decode(self, latent):
@@ -285,12 +290,12 @@ class CANN_VAE(Model):
         enc_out = self.enc(flat_in)
         latent = enc_out[:, 0:self.latent_dim] + normal_rand * tf.exp(enc_out[:, self.latent_dim:]) # Reparameterization trick
         # print(latent)
-        params = self.dec(latent)
+        params = self.dec(latent) * 0.01
         # print(params)
-        params_split = tf.split(params, self.n_params, axis=1)
-        print(params_split)
+        params_split = tf.split(params, self.n_params + 1, axis=1)
         means, variances = self.cann_model(params_split)
         epsilon = 1e-6
+
         rec, kl = nelbo(inputs, means, variances + epsilon, enc_out)
         # self.add_loss(tf.reduce_min(variances))
         self.add_loss(tf.reduce_mean(rec + kl))
@@ -306,14 +311,63 @@ class CANN_VAE(Model):
         callback = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=100)
         self.fit(xs, ys, epochs=epochs, batch_size=batch_size, validation_split=validation_split, callbacks=callback)
 
+class CANN_VAE_Pretraining(Model):
+    def __init__(self, n_params, lam_ut_all):
+        super().__init__()
+        self.n_params = n_params
+        self.lam_ut_all = lam_ut_all
+        self.dense = Dense(n_params + 1, kernel_constraint=keras.constraints.NonNeg(), kernel_initializer=initializer_1, use_bias=False)
+        self.flatten = Flatten()
+        self.cann_model = ortho_cann_3ff_model(lam_ut_all)
+
+    def call(self, inputs):
+
+        params = self.dense(inputs)
+        params_split = tf.split(params, self.n_params + 1, axis=1)
+        means, variances = self.cann_model(params_split)
+        epsilon = 1e-6
+
+        # rec = rec_loss(inputs, means, variances + epsilon)
+        # # self.add_loss(tf.reduce_min(variances))
+        # self.add_loss(tf.reduce_mean(rec))
+        # self.add_metric(tf.reduce_mean(rec), name='rec')
+        # self.add_metric(tf.reduce_mean(kl), name='kl')
+        return tf.stack([means, variances], axis=-1)
+
+class CANN_VAE_Indirect(Model):
+    def __init__(self, n_params, latent_dim, lam_ut_all):
+        super().__init__()
+        self.n_params = n_params
+        self.latent_dim = latent_dim
+        self.lam_ut_all = lam_ut_all
+        self.enc = Encoder(latent_dim)
+        self.dec = Decoder(n_params + 1)
+        self.flatten = Flatten()
+
+
+    def call(self, inputs):
+        flat_in = self.flatten(inputs)
+        batch = tf.shape(inputs)[0]
+        normal_rand = tf.random.normal(shape=(batch, self.latent_dim), dtype=tf.float32)
+        enc_out = self.enc(flat_in)
+        latent = enc_out[:, 0:self.latent_dim] + normal_rand * tf.exp(
+            enc_out[:, self.latent_dim:])  # Reparameterization trick
+        # print(latent)
+        params = self.dec(latent) * 0.01
+        return params
+
 
 def nelbo(inputs, means, variances, enc_out):
-    return rec_loss(inputs, means, variances), kl_loss(enc_out) / tf.reduce_sum(tf.ones_like(inputs), axis=(1, 2))
+    return rec_loss(inputs, means, variances), 0 * kl_loss(enc_out) / tf.reduce_sum(tf.ones_like(inputs), axis=(1, 2))
 
 def rec_loss(inputs, means, variances):
     squared_diff = tf.square(inputs - means) / variances
-    return 0.5 * tf.reduce_mean(squared_diff + tf.math.log(variances), axis=(1, 2))
+    return 0.5 * tf.reduce_mean(squared_diff + tf.math.log(2 * np.pi * variances), axis=(1, 2))
 
+def rec_loss_trainable(y_true, y_pred):
+    print(y_pred.shape)
+    eps = 1e-6
+    return rec_loss(y_true, y_pred[:, :, :, 0], y_pred[:, :, :, 1] + eps)
 def kl_loss(enc_out):
     latent_dim = int(enc_out.shape[1] / 2)
     means =  enc_out[:, 0:latent_dim]
@@ -326,29 +380,77 @@ def kl_loss(enc_out):
 # Returns trained model as well as reshaped stretch and stress inputs
 def train_bcann_vae(stretches, stresses, should_train=False, independent=True):
     # Reshape stretch and stress inputs
-    stretches = np.float64(stretches)
-    stresses = np.float64(stresses) # 2 x (ns x 5 x 100) x 2
-    lam_ut_all = [[stretches.reshape((-1, 500, 2))[0, :, k].flatten() for k in range(2)] for i in range(2)]
+    stretches = np.float64(stretches) # (3 x 100) x 2
+    stresses = np.float64(stresses) # n x 5 x (3 x 100) x 2
+    lam_ut_all = [stretches[:, k].flatten() for k in range(2)]
     # P_ut_all = [[stresses.reshape((2, -1, 500, 2))[i, :,:, k].flatten() for k in range(2)] for i in range(2)]
-    P_ut_all = stresses.reshape((2, -1, 500, 2)).transpose((1, 0, 2, 3)).reshape((-1, 1000, 2))
+    P_ut_all = stresses.reshape((-1, 300, 2))
+
     # Define hyperparameters
     modelFit_mode = "0123456789"
-    epochs = 2000
-    batch_size = 10 # may want to increase? also may not matter since so many close by data points
+    epochs = 20000
+    batch_size = 100  # may want to increase? also may not matter since so many close by data points
     gamma_ss = []
     P_ss = []
     last_weights = []
-
-    # Iterate over regularization values
     path2saveResults = '../Results'
     id = "independent" if independent else "covariance"
     Save_path = path2saveResults + f'/model_vae_{id}.h5'
     Save_weights = path2saveResults + f'/weights_vae_{id}'
     path_checkpoint = path2saveResults + f'/best_weights_vae_{id}'
 
+    # Pretrain
+    # for i in range(P_ut_all.shape[0]):
+    path_checkpoint = path2saveResults + f'/best_weights_pretrain_{id}'
+    model_pretrain = CANN_VAE_Pretraining(3 * 17, lam_ut_all)
+    input = np.eye(P_ut_all.shape[0])
+
+    if should_train:
+        opti1 = tf.optimizers.Adam(learning_rate=0.5)
+        # Note custom loss (negative log likelihood) is used
+        model_pretrain.compile(optimizer=opti1, loss=rec_loss_trainable)  # don't add losses sincen already added
+        # Stop early if loss doesn't decrease for 2000 epochs
+        es_callback = keras.callbacks.EarlyStopping(monitor="loss", min_delta=1e-6, patience=2000,
+                                                    restore_best_weights=True)
+
+        modelckpt_callback = keras.callbacks.ModelCheckpoint(
+            monitor="loss",
+            filepath=path_checkpoint,
+            verbose=0,
+            save_weights_only=True,
+            save_best_only=True,
+        )
+
+        history = model_pretrain.fit(input,
+                            P_ut_all,
+                            batch_size=batch_size,
+                            epochs=epochs,
+                            validation_split=0.0,
+                            callbacks=[es_callback, modelckpt_callback],
+                            shuffle=True,
+                            verbose=1)
+
+        model_pretrain.load_weights(path_checkpoint, by_name=False, skip_mismatch=False)
+        model_pretrain.save_weights(Save_weights, overwrite=True)
+    else:
+        model_pretrain.load_weights(Save_weights)
+
+    print(rec_loss_trainable(np.float64(P_ut_all), np.float64(model_pretrain.predict(np.float64(input)))))
+    print("LOSS")
+    return model_pretrain, input
+    # ground_truth_params = model_pretrain.get_weights()[0] # nx52 matrix
+    # CANN_VAE_Pretraining
+
+
+
+
+
+
 
     # Build model
     model = CANN_VAE(3 * 17, 128, lam_ut_all)
+
+    stress_old = model.predict(P_ut_all)
 
     # Train model
     if should_train:
@@ -379,12 +481,15 @@ def train_bcann_vae(stretches, stresses, should_train=False, independent=True):
 
 
         model.load_weights(path_checkpoint, by_name=False, skip_mismatch=False)
-        tf.keras.models.save_model(model, Save_path, overwrite=True)
+        # tf.keras.models.save_model(model, Save_path, overwrite=True)
         model.save_weights(Save_weights, overwrite=True)
     else:
         model.load_weights(Save_weights)
 
 
+    stress_new = model.predict(P_ut_all)
+    print(stress_old)
+    print(stress_new)
     return model
 
 

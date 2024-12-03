@@ -13,13 +13,13 @@ class DummyModel:
     def predict(self, input):
         return np.zeros_like(input)
 
-def reshape_input_output_mesh(array):
+def reshape_input_output_mesh(array, n_exps=5):
     """
     Reshape stretch or stress data from mesh such that it is a 2 x 5 x 2 list of numpy arrays (2 mounting directions, 5 experiments, 2 for x and y stretch / stress)
     :param array: 2 x 2 list of numpy arrays (first index correesponds to
     :return: 2 x 5 x 2 list of numpy arrays
     """
-    array = [[np.array_split(x, 5) for x in y] for y in array]
+    array = [[np.array_split(x, n_exps) for x in y] for y in array]
     array = [[[array[i][j][k] for j in range(len(array[0]))] for k in
                          range(len(array[0][0]))] for i in range(len(array))]
     return array

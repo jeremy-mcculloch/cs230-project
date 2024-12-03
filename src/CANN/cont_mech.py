@@ -41,7 +41,6 @@ def get_max_inv_mesh(lam_ut_all, modelFitMode):
         for i in range(Is_max.shape[0]):
             if i not in modes:
                 Is_max[i, :] = 0
-
     return Is_max
 
 def get_inv_value_biax_90(stretch):
