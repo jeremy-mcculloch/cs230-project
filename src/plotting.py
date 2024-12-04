@@ -12,8 +12,8 @@ plt.rcParams["font.family"] = "Source Sans 3"
 
 # plt.rcParams["font.weight"] = "bold"
 # plt.rcParams["axes.labelweight"] = "bold"
-plt.rcParams['xtick.labelsize'] = 40
-plt.rcParams['ytick.labelsize'] = 40
+plt.rcParams['xtick.labelsize'] = 35
+plt.rcParams['ytick.labelsize'] = 35
 plt.rcParams['xtick.minor.size'] = 7
 plt.rcParams['ytick.minor.size'] = 7
 plt.rcParams['xtick.minor.width'] = 1
@@ -65,12 +65,16 @@ def plot_bcann(stretches, stresses, model_given, lam_ut_all, terms, id, modelFit
 
     plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank, plot_dist)
 
-def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank, plot_dist):
+def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, stress_pred_terms, terms, id, modelFit_mode, blank, plot_dist, n_samples=5):
     i_dev = 9
     i_test = 13
-    stretch_plot = stretches.reshape((2, 5, 5, -1, 2))[0, 0, :, :, :]  # 5 x 100 x 2
-    stress_true = stresses.reshape((2, 5, 5, -1, 2)) # 2 x 5(n_ex) x 5 x 100 x 2( x/y)
-
+    stretch_plot = stretches.reshape((2, n_samples, 5, -1, 2))[0, 0, :, :, :]  # 5 x 100 x 2
+    stress_true = stresses.reshape((2, n_samples, 5, -1, 2)) # 2 x 5(n_ex) x 5 x 100 x 2( x/y)
+    stress_pred_mean = stress_pred_mean.reshape((2, 5, -1, 2)) # 2 x 5(n_ex) x 5 x 100 x 2( x/y)
+    stress_pred_std  = stress_pred_std.reshape((2, 5, -1, 2)) # 2 x 5(n_ex) x 5 x 100 x 2( x/y)
+    print(stretches.reshape((2, n_samples, 5, -1, 2)).shape)
+    print(stretch_plot.shape)
+    print(stress_pred_std.shape)
     # Plot Best Fit
     plt.rcParams['text.usetex'] = False
     plt.rcParams['figure.figsize'] = [30, 20 if terms else 15]
@@ -120,6 +124,9 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
             else:
                 train_loss += nll
 
+        if n_samples == 1:
+            r2 = r2_score_nonnegative(outputs[i][:].flatten(), pred_mean[i][:].flatten())
+
         # Create plot that draws a line on the upper bound
         axes[i].plot(inputs[i], pred_mean[i], lw=4, zorder=24, color='k')
 
@@ -138,22 +145,27 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
         if inputs[i].shape[0] > num_points:
             input_old = inputs[i]
             inputs[i] = np.linspace(np.min(input_old), np.max(input_old), num_points)
-            outputs[i] = np.array([np.interp(inputs[i], input_old, outputs[i][j, :]) for j in range(5)])
+            outputs[i] = np.array([np.interp(inputs[i], input_old, outputs[i][j, :]) for j in range(n_samples)])
 
         if terms or not plot_dist:
-            for j in range(5):
+            for j in range(n_samples):
                 scatterplot = axes[i].scatter(inputs[i], outputs[i][j, :], s=300, zorder=25, lw=3, facecolors='w', edgecolors='k',
                                             clip_on=False)
-        else:
+        if n_samples > 1:
             data_mean = np.mean(outputs[i], axis=0)
             data_std = np.std(outputs[i], axis=0)
             data_std_sample = np.std(outputs[i], axis=0, ddof=1)
+            eps = 1e-6
             errors = 0.5 * (np.log(2 * np.pi * (data_std ** 2 + eps)) + (outputs[i][:, :] - data_mean) ** 2 / (
                     data_std ** 2 + eps))  # Result should be 5 x 100
             nll_min = np.mean(errors)
-            axes[i].fill_between(inputs[i], data_mean - data_std_sample, data_mean + data_std_sample, lw=0, zorder=1,
-                                 color="#FF0000", alpha = 0.25, label=i + 1)
-            axes[i].plot(inputs[i], data_mean, lw=4, zorder=24, color='#FF0000')
+            if plot_dist and not terms:
+                axes[i].fill_between(inputs[i], data_mean - data_std_sample, data_mean + data_std_sample, lw=0, zorder=1,
+                                     color="#FF0000", alpha = 0.25, label=i + 1)
+                axes[i].plot(inputs[i], data_mean, lw=4, zorder=24, color='#FF0000')
+
+        else:
+            nll_min = 0
 
         axes[i].set_xlabel(direction_strings[i] + " stretch [-]", labelpad=-40)
         axes[i].set_ylabel(direction_strings[i] + " stress [kPa]", labelpad=-40)
@@ -178,7 +190,10 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
         # secax.set_xlabel("Temp", labelpad=-50)
 
         if not terms:
-            secax.set_xlabel(f"Extra NLL = {nll - nll_min:.2f}", labelpad=-50)
+            if n_samples == 1:
+                secax.set_xlabel(f"$R^2$ = {r2:.2f}", labelpad=-50)
+            else:
+                secax.set_xlabel(f"Extra NLL = {nll - nll_min:.2f}", labelpad=-50)
             # axes[i].get_shared_y_axes().get_siblings(axes[i])[0].set_xlabel(f"$R^2$ = {r2:.4f}",
             #                                                                             labelpad=-50)
 

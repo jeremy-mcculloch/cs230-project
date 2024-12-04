@@ -329,7 +329,7 @@ def Compile_and_fit(model_given, input_train, output_train, epochs, path_checkpo
                               validation_split=0.0,
                               callbacks=[es_callback, modelckpt_callback, weight_hist_callback],
                               shuffle=True,
-                              verbose=0,
+                              verbose=2,
                               sample_weight=sample_weights)
 
     return model_given, history, weight_hist_arr

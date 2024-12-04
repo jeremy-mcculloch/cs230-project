@@ -11,9 +11,9 @@ if __name__ == "__main__":
     stretches, stresses = load_data()
 
     # Switch which of these is uncommented to determine which type of model is trained
-    # id = "ensemble"
-    # id = "independent"
-    id = "correlated"
+    id = "ensemble"
+    # id = "independent0p1"
+    # id = "correlated"
     # id = "unregularized"
 
     # Set to true to train model, false to load previously trained model

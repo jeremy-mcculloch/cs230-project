@@ -1,6 +1,6 @@
 import numpy as np
 from keras.models import Sequential
-from keras.layers import Dense, Flatten, Layer
+from keras.layers import Dense, Flatten, Layer, BatchNormalization
 from keras import Model
 import tensorflow_probability as tfp
 import keras
@@ -13,16 +13,18 @@ from src.CANN.util_functions import traindata, Compile_and_fit
 from src.utils import *
 from src.CANN.models import ortho_cann_3ff
 
-global_scale_factor = 1e6
+global_scale_factor = 1e3
 
 class Encoder(Layer):
     def __init__(self, latent_dim):
         super().__init__()
         self.fcnet = Sequential()
+        self.batchnorm = BatchNormalization()
         self.dense1 = Dense(128, activation='relu')
         self.dense2 = Dense(128, activation='relu')
         self.dense3 = Dense(128, activation='relu')
         self.dense4 = Dense(latent_dim * 2) # mean and log std dev
+        self.fcnet.add(self.batchnorm)
         self.fcnet.add(self.dense1)
         self.fcnet.add(self.dense2)
         self.fcnet.add(self.dense3)
@@ -111,7 +113,7 @@ def ortho_cann_3ff_model(lam_ut_all):
     # tf.keras.Input(shape=(1,), name='I1')
     # Inputs defined
 
-    invs = get_invs(lam_ut_all)
+    invs = get_invs_old(lam_ut_all)
 
     I1_in = invs[:, 0]
     I2_in = invs[:, 1]
@@ -136,7 +138,7 @@ def ortho_cann_3ff_model(lam_ut_all):
     I4theta_out, I4neg_out, params5 = SingleInvNet_I4theta(I4theta_ref, I4negtheta_ref, 14)
     params = params1 + params2 + params3 + params4 + params5
 
-    output_grads = get_output_grads(lam_ut_all)  # 1000 x 5 x 2
+    output_grads = get_output_grads_old(lam_ut_all)  # 1000 x 5 x 2
 
     theta = np.pi / 3
     grad_I4theta = output_grads[:, 2, np.newaxis, :] * (np.cos(theta)) ** 2 \
@@ -265,9 +267,10 @@ def train_vae(stretches, stresses, epochs=5000, should_save=True):
     inputs = stresses[:, :, :] / global_scale_factor
     stdev = np.std(inputs)
     model = CANN_VAE(34, 64, stretches)
-    optimizer = keras.optimizers.Adam(lr=0.0001)
+    optimizer = keras.optimizers.Adam(lr=0.0001, clipvalue=0.1)
 
     model.compile(optimizer=optimizer)
+    print(np.max(inputs))
     test, params, stdev = model(inputs)
     print(test)
     print(stdev)
@@ -281,38 +284,44 @@ def train_vae(stretches, stresses, epochs=5000, should_save=True):
     return model
 
 def load_vae(stretches, stresses):
-    model = CANN_VAE(34, 64, stretches)
+    stddev = np.load('./Results/stddev.npy')
+    model = CANN_VAE(34, 64, stretches, stddev=stddev)
     inputs = stresses[:, :, :] / global_scale_factor
     test, params, stdev = model(inputs)
     model.load_weights('./Results/vae_weights')
     return model
 
+from src.plotting import plot_bcann_raw_data
 def test_vae(model, stretches, stresses):
     inputs = stresses[:, :, :] / global_scale_factor
-
+    print(inputs.shape)
     output, params, stdev = model(inputs)
     # np_config.enable_numpy_behavior()
 
-    stress_out = output[:, :, :].numpy().reshape((10, 10, 100, 2)) * global_scale_factor
-    stress_in = stresses[:, :, :].reshape((10, 10, 100, 2))
-    stretch_plot = stretches[0, :, :].reshape((5, 100, 2))
-    stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
+    stress_out = output[:, :, :].numpy().reshape((10, 10, -1, 2)) * global_scale_factor
+    stress_in = stresses[:, :, :].reshape((10, 10, -1, 2))
+    stretch_plot = stretches.reshape((2, 5, -1, 2))
+    # stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
+    print(stretch_plot.shape)
+    plot_bcann_raw_data(stretch_plot, stress_in[0, :, :, :], stress_out[0, :, :, :], (stress_out[0, :, :, :] ** 0) *  stdev[0], None, False, "test",
+                            "vae_old", False, False, n_samples=1)
 
-    fig, axes = plt.subplots(4, 5)
-    for i in range(4):
-        for j in range(5):
-            # Row i, column j
-            for k in range(2):
-                axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                                stress_in[k, int(i / 2) * 5 + j, :, i % 2], color="black")
-                axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                                stress_out[k, int(i / 2) * 5 + j, :, i % 2], color="red")
 
-    plt.show()
+# fig, axes = plt.subplots(4, 5)
+    # for i in range(4):
+    #     for j in range(5):
+    #         # Row i, column j
+    #         for k in range(2):
+    #             axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+    #                             stress_in[k, int(i / 2) * 5 + j, :, i % 2], color="black")
+    #             axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+    #                             stress_out[k, int(i / 2) * 5 + j, :, i % 2], color="red")
+    #
+    # plt.savefig("../Results/vae_old/cann_test.pdf")
 
     ## Meta Test
     # train_cann(stretches[0, :, :], stress_out[0, :, :, :].reshape((-1, 2)))
-    validate_cann(stretches[0, :, :], stress_out[0, :, :, :].reshape((-1, 2)), params[0, :])
+    # validate_cann(stretches[0, :, :], stress_out[0, :, :, :].reshape((-1, 2)), params[0, :])
 
 
 
@@ -350,27 +359,95 @@ def nuts_sample(model, stretches, stress_map, stresses):
     samples = do_sampling(initial_state).numpy() # 100 x 1 x 64
 
     stress_out_avg = np.zeros_like(stresses)
+    stress_std_avg = np.zeros_like(stresses)
     for i in range(n_samples):
         latent = samples[i, :, :] # 1 x 64
         stress_out, params_out, stdev_out = model.decode(latent)
         stress_out_avg += stress_out
+        stress_std_avg += stdev_out
     stress_out_avg /= n_samples
+    stress_std_avg /= n_samples
 
-    stretch_plot = stretches[0, :, :].reshape((5, 100, 2))
-    stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
 
-    stress_out_plot = stress_out_avg.numpy() .reshape((10, 100, 2)) * global_scale_factor
-    stress_in_plot = stresses.reshape((10, 100, 2))
 
-    fig, axes = plt.subplots(4, 5)
-    for i in range(4):
-        for j in range(5):
-            axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                            stress_in_plot[int(i / 2) * 5 + j, :, i % 2], color="black")
-            axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                            stress_out_plot[int(i / 2) * 5 + j, :, i % 2], color="red")
+    stress_out = stress_out_avg.numpy().reshape((10, -1, 2)) * global_scale_factor
+    stress_in = stresses.reshape((10, -1, 2))
+    stretch_plot = stretches.reshape((2, 5, -1, 2))
+    # stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
+    print(stretch_plot.shape)
+    plot_bcann_raw_data(stretch_plot, stress_in, stress_out, (stress_out ** 0) * stress_std_avg, None,
+                        False, "nuts",
+                        "vae_old", False, False, n_samples=1)
 
-    plt.show()
+    # fig, axes = plt.subplots(4, 5)
+    # for i in range(4):
+    #     for j in range(5):
+    #         axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+    #                         stress_in_plot[int(i / 2) * 5 + j, :, i % 2], color="black")
+    #         axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+    #                         stress_out_plot[int(i / 2) * 5 + j, :, i % 2], color="red")
+    #
+    # plt.savefig("../Results/vae_old/cann_nuts.pdf")
+
+
+# # 10 x 100 x 2
+# def train_cann(stretches, stresses):
+#     stretches = np.float64(stretches)
+#     stresses = np.float64(stresses)
+#     lam_ut_all = [[stretches.reshape((-1, 2))[:, k].flatten() for k in range(2)] for i in range(2)]
+#     P_ut_all = [[stresses.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
+#     modelFit_mode = "0123456789"
+#     alpha = 0
+#     p = 1
+#     epochs = 10000
+#     batch_size = 64
+#     gamma_ss = []
+#     P_ss = []
+#     Psi_model, terms = ortho_cann_3ff(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, False, p)
+#     model_UT, model_SS, Psi_model, model = modelArchitecture("mesh", Psi_model)
+#     # Load training data
+#
+#     model_given, input_train, output_train, sample_weights = traindata(modelFit_mode, model_UT, lam_ut_all, P_ut_all,
+#                                                                                model_SS, gamma_ss, P_ss, model, 0)
+#     # # model_given.summary(print_fn=print)
+#     path2saveResults = '../Results'
+#     Save_path = path2saveResults + '/model.h5'
+#     Save_weights = path2saveResults + '/weights'
+#     path_checkpoint = path2saveResults + '/best_weights'
+#
+#     # Train model
+#     model_given, history, weight_hist_arr = Compile_and_fit(model_given, input_train, output_train, epochs,
+#                                                             path_checkpoint,
+#                                                                     sample_weights, batch_size)
+#
+#     model_given.load_weights(path_checkpoint, by_name=False, skip_mismatch=False)
+#     tf.keras.models.save_model(Psi_model, Save_path, overwrite=True)
+#     Psi_model.save_weights(Save_weights, overwrite=True)
+#             #
+#             # # Add final weights to model history
+#             # threshold = 1e-3
+#     model_weights_0 = Psi_model.get_weights()
+#             # model_weights_0 = [model_weights_0[i] if i%2 == 0 or model_weights_0[i] > threshold ** p else 0.0 * model_weights_0[i] for i in range(len(model_weights_0))]
+#             # weight_hist_arr.append(model_weights_0)
+#             # Psi_model.set_weights(model_weights_0)
+#
+#     Stress_predict_UT = model_UT.predict(lam_ut_all)
+#
+#     stretch_plot = stretches.reshape((5, -1, 2))
+#     stress_in_plot = stresses.reshape((10, -1, 2))
+#
+#     stress_out_plot = np.array(Stress_predict_UT).squeeze().transpose((0, 2, 1)).reshape((10, -1, 2)) # 2 x 500 x 2
+#     fig, axes = plt.subplots(4, 5)
+#     stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
+#     for i in range(4):
+#         for j in range(5):
+#             axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+#                             stress_in_plot[int(i / 2) * 5 + j, :, i % 2], color="black")
+#             axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+#                             stress_out_plot[int(i / 2) * 5 + j, :, i % 2], color="red")
+#
+#     plt.show()
+
 
 # 10 x 100 x 2
 def train_cann(stretches, stresses):
@@ -378,19 +455,19 @@ def train_cann(stretches, stresses):
     stresses = np.float64(stresses)
     lam_ut_all = [[stretches.reshape((-1, 2))[:, k].flatten() for k in range(2)] for i in range(2)]
     P_ut_all = [[stresses.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
-    modelFit_mode = "0123456789"
+    modelFit_mode = "01"
     alpha = 0
     p = 1
-    epochs = 10000
+    epochs = 1000
     batch_size = 64
     gamma_ss = []
     P_ss = []
-    Psi_model, terms = ortho_cann_3ff(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, False, p)
+    Psi_model, terms = ortho_cann_3ff(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, True, p)
     model_UT, model_SS, Psi_model, model = modelArchitecture("mesh", Psi_model)
     # Load training data
 
     model_given, input_train, output_train, sample_weights = traindata(modelFit_mode, model_UT, lam_ut_all, P_ut_all,
-                                                                               model_SS, gamma_ss, P_ss, model, 0)
+                                                                               model_SS, gamma_ss, P_ss, model, 0, is_bcann=False, should_normalize=True)
     # # model_given.summary(print_fn=print)
     path2saveResults = '../Results'
     Save_path = path2saveResults + '/model.h5'
@@ -414,80 +491,32 @@ def train_cann(stretches, stresses):
             # Psi_model.set_weights(model_weights_0)
 
     Stress_predict_UT = model_UT.predict(lam_ut_all)
-
-    stretch_plot = stretches.reshape((5, -1, 2))
-    stress_in_plot = stresses.reshape((10, -1, 2))
-
-    stress_out_plot = np.array(Stress_predict_UT).squeeze().transpose((0, 2, 1)).reshape((10, -1, 2)) # 2 x 500 x 2
-    fig, axes = plt.subplots(4, 5)
-    stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
-    for i in range(4):
-        for j in range(5):
-            axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                            stress_in_plot[int(i / 2) * 5 + j, :, i % 2], color="black")
-            axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                            stress_out_plot[int(i / 2) * 5 + j, :, i % 2], color="red")
-
-    plt.show()
+    # print(Stress_predict_UT.shape)
 
 
-# 10 x 100 x 2
-def train_cann(stretches, stresses):
-    stretches = np.float64(stretches)
-    stresses = np.float64(stresses)
-    lam_ut_all = [[stretches.reshape((-1, 2))[:, k].flatten() for k in range(2)] for i in range(2)]
-    P_ut_all = [[stresses.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
-    modelFit_mode = "0123456789"
-    alpha = 0
-    p = 1
-    epochs = 10000
-    batch_size = 64
-    gamma_ss = []
-    P_ss = []
-    Psi_model, terms = ortho_cann_3ff(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, alpha, False, p)
-    model_UT, model_SS, Psi_model, model = modelArchitecture("mesh", Psi_model)
-    # Load training data
+    stress_out = np.array(Stress_predict_UT).squeeze().transpose((0, 2, 1)).reshape((10, -1, 2))
+    stress_in = stresses.reshape((10, -1, 2))
+    stretch_plot = np.stack([stretches, stretches], axis=0).reshape((2, 5, -1, 2))
+    # stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
+    print(stretch_plot.shape)
+    plot_bcann_raw_data(stretch_plot, stress_in, stress_out, stress_out * 0, None,
+                        False, "baseline",
+                        "vae_old", False, False, n_samples=1)
 
-    model_given, input_train, output_train, sample_weights = traindata(modelFit_mode, model_UT, lam_ut_all, P_ut_all,
-                                                                               model_SS, gamma_ss, P_ss, model, 0)
-    # # model_given.summary(print_fn=print)
-    path2saveResults = '../Results'
-    Save_path = path2saveResults + '/model.h5'
-    Save_weights = path2saveResults + '/weights'
-    path_checkpoint = path2saveResults + '/best_weights'
-
-    # Train model
-    model_given, history, weight_hist_arr = Compile_and_fit(model_given, input_train, output_train, epochs,
-                                                            path_checkpoint,
-                                                                    sample_weights, batch_size)
-
-    model_given.load_weights(path_checkpoint, by_name=False, skip_mismatch=False)
-    tf.keras.models.save_model(Psi_model, Save_path, overwrite=True)
-    Psi_model.save_weights(Save_weights, overwrite=True)
-            #
-            # # Add final weights to model history
-            # threshold = 1e-3
-    model_weights_0 = Psi_model.get_weights()
-            # model_weights_0 = [model_weights_0[i] if i%2 == 0 or model_weights_0[i] > threshold ** p else 0.0 * model_weights_0[i] for i in range(len(model_weights_0))]
-            # weight_hist_arr.append(model_weights_0)
-            # Psi_model.set_weights(model_weights_0)
-
-    Stress_predict_UT = model_UT.predict(lam_ut_all)
-
-    stretch_plot = stretches.reshape((5, -1, 2))
-    stress_in_plot = stresses.reshape((10, -1, 2))
-
-    stress_out_plot = np.array(Stress_predict_UT).squeeze().transpose((0, 2, 1)).reshape((10, -1, 2)) # 2 x 500 x 2
-    fig, axes = plt.subplots(4, 5)
-    stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
-    for i in range(4):
-        for j in range(5):
-            axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                            stress_in_plot[int(i / 2) * 5 + j, :, i % 2], color="black")
-            axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
-                            stress_out_plot[int(i / 2) * 5 + j, :, i % 2], color="red")
-
-    plt.show()
+    # stretch_plot = stretches.reshape((5, -1, 2))
+    # stress_in_plot = stresses.reshape((10, -1, 2))
+    #
+    # stress_out_plot = np.array(Stress_predict_UT).squeeze().transpose((0, 2, 1)).reshape((10, -1, 2)) # 2 x 500 x 2
+    # fig, axes = plt.subplots(4, 5)
+    # stretch_plot_delta = stretch_plot[2, :, 0] * 1e-6
+    # for i in range(4):
+    #     for j in range(5):
+    #         axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+    #                         stress_in_plot[int(i / 2) * 5 + j, :, i % 2], color="black")
+    #         axes[i][j].plot(stretch_plot[j, :, i % 2] + stretch_plot_delta,
+    #                         stress_out_plot[int(i / 2) * 5 + j, :, i % 2], color="red")
+    #
+    # plt.savefig("../Results/vae_old/cann_baseline.pdf")
 
 # params is len 34
 def validate_cann(stretches, stresses, params):

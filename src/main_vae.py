@@ -10,7 +10,7 @@ if __name__ == "__main__":
 
     stretches, stresses = load_data_vae()
     stress_train, stress_dev, stress_test = train_test_split(stresses)
-    vae_model, input = train_bcann_vae(stretches[0, 0, :, :], stress_train, should_train=True, independent=True)
+    vae_model, input = train_bcann_vae(stretches[0, 0, :, :], stress_train, should_train=False, independent=True)
     input = input.reshape((stress_train.shape[0], stress_train.shape[1], -1))
     # Training
     for i in range(stress_train.shape[0]):
