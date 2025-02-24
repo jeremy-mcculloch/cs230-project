@@ -18,7 +18,7 @@ import re
 
 from src.CANN.models import I4_theta
 
-from src.CANN.util_functions import reshape_input_output_mesh, traindata, makeDIR, Compile_and_fit
+from src.CANN.util_functions import reshape_input_output_mesh, traindata, makeDIR, Compile_and_fit, get_model_id
 from src.CANN.models import get_max_inv_mesh, calculate_I4theta_max
 
 
@@ -665,7 +665,9 @@ def ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, modelFit_mode, al
 
 # Train BCANN based on stretch and stress data provided
 # Returns trained model as well as reshaped stretch and stress inputs
-def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_train=False, id="independent"):
+def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_train=False, model_type="independent", alpha_in=0):
+    model_id = get_model_id(model_type, alpha_in)
+
     # Reshape stretch and stress inputs
     stretches = np.float64(stretches)
     stresses = np.float64(stresses) # 2 x (ns*500) x 2
@@ -673,8 +675,8 @@ def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_
     P_ut_all = [[stresses.reshape((2, -1, 2))[i, :, k].flatten() for k in range(2)] for i in range(2)]
 
     # Define hyperparameters
-    alphas =  [0] if id=="unregularized" else [0, 0.1] # Change as needed
-    ps = [1.0] if id=="unregularized" else [1.0 , 0.5]
+    alphas =  [0] if model_type == "unregularized" else [0, alpha_in]
+    ps = [1.0] if model_type == "unregularized" else [1.0 , 0.5]
     epochs = 2000
     batch_size = 1000
     gamma_ss = []
@@ -685,16 +687,16 @@ def train_bcanns(stretches, stresses, modelFit_mode = "0123456789abcde", should_
     for i in range(len(alphas)):
         path2saveResults = '../Results/' + modelFit_mode
         makeDIR(path2saveResults)
-        Save_path = path2saveResults + f'/model_{id}.h5'
-        Save_weights = path2saveResults + f'/weights_{id}'
-        path_checkpoint = path2saveResults + f'/best_weights_{id}'
+        Save_path = path2saveResults + f'/model_{model_id}.h5'
+        Save_weights = path2saveResults + f'/weights_{model_id}'
+        path_checkpoint = path2saveResults + f'/best_weights_{model_id}'
 
         if i < len(alphas) - 1 and not should_train: # If not training, skip to last alpha and load model
             continue
 
         # Build model
         model = ortho_cann_3ff_bcann(lam_ut_all, gamma_ss, P_ut_all, P_ss, "0123456789", alphas[i],
-                                                    True, ps[i], not ("correlated" in id), i > 0)
+                                     True, ps[i], not (model_type == "correlated"), i > 0)
 
 
         # If not the first iteration, set initial weights to be final weights from previous iteration

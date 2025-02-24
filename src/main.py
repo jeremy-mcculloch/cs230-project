@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.CANN.util_functions import disp_mat
+from src.CANN.util_functions import disp_mat, get_model_id
 from src.bcann_vae import disp_equation_weights_bcann, train_bcanns, train_bcann_vae, train_ensemble
 from src.plotting import plot_bcann, plot_bcann_raw_data
 from src.utils import *
@@ -11,10 +11,14 @@ if __name__ == "__main__":
     stretches, stresses = load_data()
 
     # Switch which of these is uncommented to determine which type of model is trained
-    id = "ensemble"
-    # id = "independent0p1"
+    # id = "ensemble"
+    model_type = "independent"
     # id = "correlated"
     # id = "unregularized"
+
+    alpha = 0.1
+    model_id = get_model_id(model_type, alpha)
+
 
     # Set to true to train model, false to load previously trained model
     should_train = False
@@ -23,14 +27,14 @@ if __name__ == "__main__":
     # modelFit_mode = "0123456789abcde" # Uncomment this to train using all data
 
     # Ensemble trains one model per sample and then takes mean and variance of result
-    if id == "ensemble":
+    if "ensemble" in model_id:
         stress_pred_mean, stress_pred_std, lam_ut_all, P_ut_all = train_ensemble(stretches[0, :, :], stresses, modelFit_mode=modelFit_mode, should_train=should_train) # Test if works the same as before
-        plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, None, terms=False, id=id, modelFit_mode=modelFit_mode, blank=False, plot_dist=True)
-        plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, None, terms=False, id=id, modelFit_mode=modelFit_mode, blank=False, plot_dist=False)
+        plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, None, terms=False, id=model_id, modelFit_mode=modelFit_mode, blank=False, plot_dist=True)
+        plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, None, terms=False, id=model_id, modelFit_mode=modelFit_mode, blank=False, plot_dist=False)
 
     else:
         # Train BCANN based on stretch and stress data provided
-        model_given, lam_ut_all, P_ut_all = train_bcanns(stretches, stresses, modelFit_mode=modelFit_mode, should_train=should_train, id=id) # Test if works the same as before
+        model_given, lam_ut_all, P_ut_all = train_bcanns(stretches, stresses, modelFit_mode=modelFit_mode, should_train=should_train, model_type=model_type, alpha_in=alpha) # Test if works the same as before
 
         # Print covariance matrix
         model_weights = model_given.get_weights()

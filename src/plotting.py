@@ -167,8 +167,9 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
         else:
             nll_min = 0
 
+        n_digits = min(int(np.log10(max_P)), 0) + 1
         axes[i].set_xlabel(direction_strings[i] + " stretch [-]", labelpad=-40)
-        axes[i].set_ylabel(direction_strings[i] + " stress [kPa]", labelpad=-40)
+        axes[i].set_ylabel(direction_strings[i] + " stress [kPa]", labelpad=-20 - 10 * n_digits)
         axes[i].minorticks_on()
 
         xt = [np.min(inputs[i]), np.max(inputs[i])]
@@ -235,7 +236,7 @@ def plot_bcann_raw_data(stretches, stresses, stress_pred_mean, stress_pred_std, 
         rec = fig.add_artist(rec)
     else:
         rect_height = 0.349
-        x_offset = 0.005
+        x_offset = 0.
         engine = fig.get_layout_engine()
         engine.set(rect=(0.005, 0.005, 0.99, 0.99), wspace=0.04)
         for j in range(5):

@@ -13,6 +13,9 @@ class DummyModel:
     def predict(self, input):
         return np.zeros_like(input)
 
+def get_model_id(model_type, alpha):
+    return model_type + f"{alpha}".replace(".", "p")
+
 def reshape_input_output_mesh(array, n_exps=5):
     """
     Reshape stretch or stress data from mesh such that it is a 2 x 5 x 2 list of numpy arrays (2 mounting directions, 5 experiments, 2 for x and y stretch / stress)
